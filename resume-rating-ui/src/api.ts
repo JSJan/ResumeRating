@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: 'http://localhost:5073/api',
+  timeout: 120000, // 2 minutes to match backend AI timeout
 });
 
 export interface Resume {
@@ -124,3 +125,63 @@ export interface SeedResult {
 }
 
 export const seedFromAssets = () => api.post<SeedResult>('/evaluation/seed');
+
+// Evaluate All API
+export const evaluateAll = (jobDescriptionId: string) =>
+  api.post<CandidateEvaluation[]>(`/evaluation/evaluate-all/${jobDescriptionId}`);
+
+// L2 Round APIs
+export interface L2ChallengePrompt {
+  scenario: string;
+  expectedApproach: string;
+  evaluationCriteria: string[];
+}
+
+export interface L2Questionnaire {
+  id: string;
+  evaluationId: string;
+  l1FeedbackId: string;
+  candidateName: string;
+  systemDesign: L2ChallengePrompt;
+  handsOnCoding: L2ChallengePrompt;
+  designThinking: L2ChallengePrompt;
+  tradeOffAnalysis: L2ChallengePrompt;
+}
+
+export interface L2Challenge {
+  scenario: string;
+  expectedApproach: string;
+  evaluationCriteria: string[];
+  candidateResponse: string;
+  score: number;
+  feedback: string;
+}
+
+export interface L2Assessment {
+  id: string;
+  evaluationId: string;
+  l1FeedbackId: string;
+  candidateName: string;
+  systemDesign: L2Challenge;
+  handsOnCoding: L2Challenge;
+  designThinking: L2Challenge;
+  tradeOffAnalysis: L2Challenge;
+  overallL2Score: number;
+  overallL2Feedback: string;
+  strengths: string;
+  weaknesses: string;
+  hiringRecommendation: string;
+  recommendedForHire: boolean;
+}
+
+export const generateL2Questionnaire = (evaluationId: string) =>
+  api.post<L2Questionnaire>(`/evaluation/l2-questionnaire/${evaluationId}`);
+
+export const submitL2Answers = (request: {
+  evaluationId: string;
+  l2QuestionnaireId: string;
+  systemDesignAnswer: string;
+  handsOnCodingAnswer: string;
+  designThinkingAnswer: string;
+  tradeOffAnalysisAnswer: string;
+}) => api.post<L2Assessment>('/evaluation/l2-feedback', request);

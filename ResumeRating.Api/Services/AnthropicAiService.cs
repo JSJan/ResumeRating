@@ -11,6 +11,8 @@ public interface IAiService
     Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription);
     Task<Questionnaire> GenerateQuestionnaireAsync(CandidateEvaluation evaluation, string resumeText, JobDescription jobDescription);
     Task<L1Feedback> EvaluateL1AnswersAsync(CandidateEvaluation evaluation, Questionnaire questionnaire, List<CandidateAnswer> answers, string resumeText, JobDescription jobDescription);
+    Task<L2Questionnaire> GenerateL2QuestionnaireAsync(CandidateEvaluation evaluation, L1Feedback l1Feedback, string resumeText, JobDescription jobDescription);
+    Task<L2Assessment> EvaluateL2AnswersAsync(CandidateEvaluation evaluation, L2Questionnaire questionnaire, L2AnswersRequest answers, string resumeText, JobDescription jobDescription);
 }
 
 public class AnthropicAiService : IAiService
@@ -228,4 +230,10 @@ public class AnthropicAiService : IAiService
     {
         public List<Question> Questions { get; set; } = [];
     }
+
+    public Task<L2Questionnaire> GenerateL2QuestionnaireAsync(CandidateEvaluation evaluation, L1Feedback l1Feedback, string resumeText, JobDescription jobDescription)
+        => throw new NotImplementedException("Anthropic provider not active. Use GitHubModelsAiService.");
+
+    public Task<L2Assessment> EvaluateL2AnswersAsync(CandidateEvaluation evaluation, L2Questionnaire questionnaire, L2AnswersRequest answers, string resumeText, JobDescription jobDescription)
+        => throw new NotImplementedException("Anthropic provider not active. Use GitHubModelsAiService.");
 }

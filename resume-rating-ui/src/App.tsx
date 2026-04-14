@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import {
   Resume, JobDescription, CandidateEvaluation, Questionnaire, L1Feedback,
+  L2Questionnaire, L2Assessment,
   uploadResume, getResumes, createJobDescription, getJobDescriptions,
   evaluateResume, getEvaluations, generateQuestionnaire, submitL1Answers,
-  seedFromAssets
+  seedFromAssets, evaluateAll, generateL2Questionnaire, submitL2Answers
 } from './api';
 
-type Tab = 'upload' | 'jobDescription' | 'evaluate' | 'questionnaire' | 'l1feedback';
+type Tab = 'upload' | 'jobDescription' | 'evaluate' | 'comparison' | 'questionnaire' | 'l1feedback' | 'l2round' | 'l2feedback';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('upload');
@@ -31,6 +32,17 @@ const App: React.FC = () => {
 
   // L1 answers state
   const [answers, setAnswers] = useState<Record<number, string>>({});
+
+  // Comparison state
+  const [comparisonJd, setComparisonJd] = useState('');
+  const [comparisonEvals, setComparisonEvals] = useState<CandidateEvaluation[]>([]);
+  const [sortField, setSortField] = useState<'overallScore' | 'experienceScore' | 'workHistoryScore' | 'educationScore' | 'sideProjectsScore' | 'jobFitScore' | 'awwFactorScore' | 'uniquenessFactor'>('overallScore');
+  const [sortAsc, setSortAsc] = useState(false);
+
+  // L2 state
+  const [l2Questionnaire, setL2Questionnaire] = useState<L2Questionnaire | null>(null);
+  const [l2Assessment, setL2Assessment] = useState<L2Assessment | null>(null);
+  const [l2Answers, setL2Answers] = useState({ systemDesign: '', handsOnCoding: '', designThinking: '', tradeOffAnalysis: '' });
 
   const handleError = (err: unknown) => {
     if (err instanceof Error) setError(err.message);
@@ -132,6 +144,72 @@ const App: React.FC = () => {
 
   React.useEffect(() => { loadData(); }, []);
 
+  const handleLoadComparison = async () => {
+    if (!comparisonJd) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await getEvaluations(comparisonJd);
+      setComparisonEvals(res.data);
+      if (res.data.length === 0) setError('No evaluations found for this job description. Evaluate candidates first or click "Evaluate All".');
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const handleEvaluateAll = async () => {
+    if (!comparisonJd) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await evaluateAll(comparisonJd);
+      setComparisonEvals(res.data);
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const handleGenerateL2 = async (evalId: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await generateL2Questionnaire(evalId);
+      setL2Questionnaire(res.data);
+      setL2Answers({ systemDesign: '', handsOnCoding: '', designThinking: '', tradeOffAnalysis: '' });
+      setActiveTab('l2round');
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const handleSubmitL2 = async () => {
+    if (!l2Questionnaire || !currentEvaluation) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await submitL2Answers({
+        evaluationId: currentEvaluation.id,
+        l2QuestionnaireId: l2Questionnaire.id,
+        systemDesignAnswer: l2Answers.systemDesign,
+        handsOnCodingAnswer: l2Answers.handsOnCoding,
+        designThinkingAnswer: l2Answers.designThinking,
+        tradeOffAnalysisAnswer: l2Answers.tradeOffAnalysis,
+      });
+      setL2Assessment(res.data);
+      setActiveTab('l2feedback');
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const sortedComparisonEvals = [...comparisonEvals].sort((a, b) => {
+    const diff = (a[sortField] as number) - (b[sortField] as number);
+    return sortAsc ? diff : -diff;
+  });
+
+  const handleSortToggle = (field: typeof sortField) => {
+    if (sortField === field) setSortAsc(!sortAsc);
+    else { setSortField(field); setSortAsc(false); }
+  };
+
+  const scoreColor = (s: number) => s >= 7 ? '#22c55e' : s >= 4 ? '#f59e0b' : '#ef4444';
+
   const ScoreBar: React.FC<{ label: string; score: number; feedback: string }> = ({ label, score, feedback }) => (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -161,8 +239,8 @@ const App: React.FC = () => {
       {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', padding: 12, borderRadius: 8, color: '#dc2626', marginBottom: 16 }}>{error}</div>}
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '2px solid #e5e7eb' }}>
-        {([['upload', 'Upload Resumes'], ['jobDescription', 'Job Description'], ['evaluate', 'Evaluate'], ['questionnaire', 'L1 Questionnaire'], ['l1feedback', 'L1 Feedback']] as [Tab, string][]).map(([key, label]) => (
+      <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '2px solid #e5e7eb', flexWrap: 'wrap' }}>
+        {([['upload', 'Upload Resumes'], ['jobDescription', 'Job Description'], ['evaluate', 'Evaluate'], ['comparison', 'Compare All'], ['questionnaire', 'L1 Questionnaire'], ['l1feedback', 'L1 Feedback'], ['l2round', 'L2 Tech Round'], ['l2feedback', 'L2 Result']] as [Tab, string][]).map(([key, label]) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -327,6 +405,130 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Comparison Tab */}
+      {activeTab === 'comparison' && (
+        <div>
+          <h2 style={{ fontSize: 20, marginBottom: 16 }}>Compare All Candidates</h2>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+            <select value={comparisonJd} onChange={e => setComparisonJd(e.target.value)}
+              style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8, flex: 1 }}>
+              <option value="">Select Job Description</option>
+              {jobDescs.map(jd => <option key={jd.id} value={jd.id}>{jd.title}</option>)}
+            </select>
+            <button onClick={handleLoadComparison} disabled={loading || !comparisonJd}
+              style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading || !comparisonJd ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+              {loading ? 'Loading...' : 'Load Comparison'}
+            </button>
+            <button onClick={handleEvaluateAll} disabled={loading || !comparisonJd}
+              style={{ background: '#8b5cf6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading || !comparisonJd ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+              {loading ? 'Evaluating...' : 'Evaluate All & Compare'}
+            </button>
+          </div>
+
+          {sortedComparisonEvals.length > 0 && (
+            <>
+              {/* Summary cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12, marginBottom: 20 }}>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, textAlign: 'center' }}>
+                  <small style={{ color: '#9ca3af' }}>Total Evaluated</small>
+                  <p style={{ fontSize: 24, fontWeight: 'bold', margin: 4 }}>{comparisonEvals.length}</p>
+                </div>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, textAlign: 'center' }}>
+                  <small style={{ color: '#9ca3af' }}>Recommended for L1</small>
+                  <p style={{ fontSize: 24, fontWeight: 'bold', margin: 4, color: '#22c55e' }}>{comparisonEvals.filter(e => e.recommendedForL1).length}</p>
+                </div>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, textAlign: 'center' }}>
+                  <small style={{ color: '#9ca3af' }}>Avg Overall Score</small>
+                  <p style={{ fontSize: 24, fontWeight: 'bold', margin: 4 }}>
+                    {(comparisonEvals.reduce((s, e) => s + e.overallScore, 0) / comparisonEvals.length).toFixed(1)}
+                  </p>
+                </div>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, textAlign: 'center' }}>
+                  <small style={{ color: '#9ca3af' }}>Top Scorer</small>
+                  <p style={{ fontSize: 14, fontWeight: 'bold', margin: 4, color: '#3b82f6' }}>
+                    {[...comparisonEvals].sort((a, b) => b.overallScore - a.overallScore)[0]?.candidateName}
+                  </p>
+                </div>
+              </div>
+
+              {/* Comparison table */}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                  <thead>
+                    <tr style={{ background: '#f9fafb' }}>
+                      <th style={{ padding: 10, textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>#</th>
+                      <th style={{ padding: 10, textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>Candidate</th>
+                      {([
+                        ['overallScore', 'Overall'],
+                        ['experienceScore', 'Experience'],
+                        ['workHistoryScore', 'Work History'],
+                        ['educationScore', 'Education'],
+                        ['sideProjectsScore', 'Projects'],
+                        ['jobFitScore', 'Job Fit'],
+                        ['awwFactorScore', 'Aww Factor'],
+                        ['uniquenessFactor', 'Unique'],
+                      ] as [typeof sortField, string][]).map(([field, label]) => (
+                        <th key={field}
+                          onClick={() => handleSortToggle(field)}
+                          style={{ padding: 10, textAlign: 'center', borderBottom: '2px solid #e5e7eb', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                          {label} {sortField === field ? (sortAsc ? '▲' : '▼') : ''}
+                        </th>
+                      ))}
+                      <th style={{ padding: 10, textAlign: 'center', borderBottom: '2px solid #e5e7eb' }}>L1?</th>
+                      <th style={{ padding: 10, textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>Expected Salary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedComparisonEvals.map((ev, idx) => (
+                      <tr key={ev.id} style={{ background: idx % 2 === 0 ? '#fff' : '#f9fafb' }}>
+                        <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', fontWeight: 'bold', color: '#9ca3af' }}>{idx + 1}</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', fontWeight: 'bold', whiteSpace: 'nowrap' }}>{ev.candidateName}</td>
+                        {([ev.overallScore, ev.experienceScore, ev.workHistoryScore, ev.educationScore, ev.sideProjectsScore, ev.jobFitScore, ev.awwFactorScore, ev.uniquenessFactor]).map((score, i) => (
+                          <td key={i} style={{ padding: 10, borderBottom: '1px solid #e5e7eb', textAlign: 'center', fontWeight: i === 0 ? 'bold' : 'normal', color: scoreColor(score) }}>
+                            {score}/10
+                          </td>
+                        ))}
+                        <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', textAlign: 'center' }}>
+                          {ev.recommendedForL1
+                            ? <span style={{ color: '#22c55e', fontWeight: 'bold' }}>✓ Yes</span>
+                            : <span style={{ color: '#ef4444' }}>✗ No</span>}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{ev.expectedSalaryRange}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Individual standouts */}
+              <h3 style={{ fontSize: 16, marginTop: 24, marginBottom: 12 }}>Candidate Highlights</h3>
+              <div style={{ display: 'grid', gap: 12 }}>
+                {[...comparisonEvals].sort((a, b) => b.overallScore - a.overallScore).map((ev, idx) => (
+                  <div key={ev.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: idx === 0 ? '#fef3c7' : idx === 1 ? '#f3f4f6' : idx === 2 ? '#fed7aa' : '#f9fafb',
+                      fontWeight: 'bold', fontSize: 16, flexShrink: 0,
+                      color: idx === 0 ? '#b45309' : idx === 1 ? '#6b7280' : idx === 2 ? '#c2410c' : '#9ca3af'
+                    }}>
+                      {idx + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <strong>{ev.candidateName}</strong>
+                        <span style={{ fontWeight: 'bold', color: scoreColor(ev.overallScore) }}>{ev.overallScore}/10</span>
+                      </div>
+                      <p style={{ color: '#374151', fontSize: 14, margin: '4px 0' }}><strong>Role:</strong> {ev.estimatedCurrentRole} | <strong>Current Pkg:</strong> {ev.estimatedCurrentPackage}</p>
+                      <p style={{ color: '#6b7280', fontSize: 14, margin: '4px 0' }}>{ev.standout}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Questionnaire Tab */}
       {activeTab === 'questionnaire' && questionnaire && (
         <div>
@@ -400,11 +602,129 @@ const App: React.FC = () => {
               {l1Feedback.areasToProbeInTechRound.map((a, i) => <li key={i}>{a}</li>)}
             </ul>
           </div>
+
+          {l1Feedback.recommendedForTechRound && currentEvaluation && (
+            <button onClick={() => handleGenerateL2(currentEvaluation.id)} disabled={loading}
+              style={{ marginTop: 16, background: '#8b5cf6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+              {loading ? 'Generating...' : 'Generate L2 Tech Round Challenges'}
+            </button>
+          )}
         </div>
       )}
 
       {activeTab === 'l1feedback' && !l1Feedback && (
         <p style={{ color: '#9ca3af' }}>No L1 feedback available yet. Generate a questionnaire and submit answers first.</p>
+      )}
+
+      {/* L2 Round Tab */}
+      {activeTab === 'l2round' && l2Questionnaire && (
+        <div>
+          <h2 style={{ fontSize: 20, marginBottom: 16 }}>L2 Tech Round - {l2Questionnaire.candidateName}</h2>
+
+          {[
+            { key: 'systemDesign' as const, label: 'System Design', icon: '🏗️', q: l2Questionnaire.systemDesign },
+            { key: 'handsOnCoding' as const, label: 'Hands-On Coding', icon: '💻', q: l2Questionnaire.handsOnCoding },
+            { key: 'designThinking' as const, label: 'Design Thinking', icon: '🎨', q: l2Questionnaire.designThinking },
+            { key: 'tradeOffAnalysis' as const, label: 'Trade-Off Analysis', icon: '⚖️', q: l2Questionnaire.tradeOffAnalysis },
+          ].map(({ key, label, icon, q }) => (
+            <div key={key} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 20, marginBottom: 16 }}>
+              <h3 style={{ fontSize: 16, marginBottom: 12 }}>{icon} {label}</h3>
+
+              <div style={{ background: '#f9fafb', borderRadius: 8, padding: 16, marginBottom: 12 }}>
+                <h4 style={{ marginTop: 0 }}>Scenario</h4>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{q.scenario}</p>
+              </div>
+
+              <div style={{ marginBottom: 8 }}>
+                <strong>Evaluation Criteria:</strong>
+                <ul style={{ margin: '4px 0' }}>
+                  {q.evaluationCriteria.map((c, i) => <li key={i} style={{ color: '#6b7280', fontSize: 14 }}>{c}</li>)}
+                </ul>
+              </div>
+
+              <textarea
+                placeholder={`Enter candidate's ${label.toLowerCase()} response...`}
+                rows={6}
+                value={l2Answers[key]}
+                onChange={e => setL2Answers({ ...l2Answers, [key]: e.target.value })}
+                style={{ width: '100%', padding: 10, border: '1px solid #d1d5db', borderRadius: 8, boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+            </div>
+          ))}
+
+          <button onClick={handleSubmitL2} disabled={loading}
+            style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+            {loading ? 'Evaluating L2...' : 'Submit & Evaluate L2 Answers'}
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'l2round' && !l2Questionnaire && (
+        <p style={{ color: '#9ca3af' }}>No L2 challenges generated yet. Complete L1 round first and generate L2 from the L1 Feedback tab.</p>
+      )}
+
+      {/* L2 Feedback Tab */}
+      {activeTab === 'l2feedback' && l2Assessment && (
+        <div>
+          <h2 style={{ fontSize: 20, marginBottom: 16 }}>L2 Result - {l2Assessment.candidateName}</h2>
+
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, padding: 16, borderRadius: 8,
+            background: l2Assessment.recommendedForHire ? '#f0fdf4' : '#fef2f2'
+          }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Overall L2 Score</h3>
+              <p style={{ margin: 0, fontWeight: 'bold', fontSize: 18,
+                color: l2Assessment.hiringRecommendation.includes('No') ? '#ef4444' : '#22c55e'
+              }}>
+                {l2Assessment.hiringRecommendation}
+              </p>
+            </div>
+            <span style={{ fontSize: 32, fontWeight: 'bold', color: l2Assessment.overallL2Score >= 7 ? '#22c55e' : l2Assessment.overallL2Score >= 4 ? '#f59e0b' : '#ef4444' }}>
+              {l2Assessment.overallL2Score}/10
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+            {[
+              { label: 'System Design', data: l2Assessment.systemDesign },
+              { label: 'Hands-On Coding', data: l2Assessment.handsOnCoding },
+              { label: 'Design Thinking', data: l2Assessment.designThinking },
+              { label: 'Trade-Off Analysis', data: l2Assessment.tradeOffAnalysis },
+            ].map(({ label, data }) => (
+              <div key={label} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <strong>{label}</strong>
+                  <span style={{ fontWeight: 'bold', color: scoreColor(data.score) }}>{data.score}/10</span>
+                </div>
+                <div style={{ background: '#e5e7eb', borderRadius: 8, height: 8, marginBottom: 8 }}>
+                  <div style={{ width: `${data.score * 10}%`, background: scoreColor(data.score), borderRadius: 8, height: 8 }} />
+                </div>
+                <p style={{ color: '#6b7280', fontSize: 14 }}>{data.feedback}</p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+            <div style={{ background: '#f0fdf4', borderRadius: 8, padding: 16 }}>
+              <h4 style={{ color: '#16a34a', marginTop: 0 }}>Strengths</h4>
+              <p>{l2Assessment.strengths}</p>
+            </div>
+            <div style={{ background: '#fef2f2', borderRadius: 8, padding: 16 }}>
+              <h4 style={{ color: '#dc2626', marginTop: 0 }}>Weaknesses</h4>
+              <p>{l2Assessment.weaknesses}</p>
+            </div>
+          </div>
+
+          <div style={{ background: '#f9fafb', borderRadius: 8, padding: 16 }}>
+            <h4>Overall L2 Assessment</h4>
+            <p>{l2Assessment.overallL2Feedback}</p>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'l2feedback' && !l2Assessment && (
+        <p style={{ color: '#9ca3af' }}>No L2 result available yet. Complete L2 tech round first.</p>
       )}
 
       {loading && (

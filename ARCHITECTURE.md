@@ -2,7 +2,7 @@
 
 ## System Overview
 
-The Resume Rating System is a two-tier application with a .NET Web API backend and a React SPA frontend, using Anthropic Claude as the AI engine.
+The Resume Rating System is a two-tier application with a .NET Web API backend and a React SPA frontend, using GitHub Models (GPT-4o) as the AI engine.
 
 ```
 ┌─────────────────────┐     HTTP/REST     ┌──────────────────────────┐
@@ -72,7 +72,7 @@ public interface IAiService
 }
 ```
 
-Currently implemented by `AnthropicAiService` (Claude). To add OpenAI or local models, implement this interface and swap the DI registration in `Program.cs`.
+Currently implemented by `GitHubModelsAiService` (GPT-4o via GitHub Models). To add other providers, implement this interface and swap the DI registration in `Program.cs`.
 
 ### 2. Structured JSON Prompts
 
@@ -94,7 +94,7 @@ Trade-off: Not suitable for concurrent access or production scale. The `IStorage
 
 The React frontend is intentionally kept in a single `App.tsx` file with inline styles:
 - **Low ceremony** — no component library, CSS framework, or router
-- **Easy to read** — entire UI in one place
+- **Easy to read** — entire UI in one place, 6 tabs including candidate comparison
 - **Fast to iterate** — no build configuration to manage
 
 ### 5. Resume Parsing Pipeline
@@ -114,9 +114,10 @@ Text extraction happens at upload time and is stored with the resume record. Thi
 ```
 1. Upload Resume ──► Parse text ──► Store resume + text
 2. Create JD ──► Store JD
-3. Evaluate ──► Send (resume text + JD) to Claude ──► Get 7 scores + feedback + salary ──► Store evaluation
-4. Generate Questionnaire ──► Send (evaluation + resume + JD) to Claude ──► Get 10-15 questions ──► Store
-5. Submit Answers ──► Send (questions + answers + context) to Claude ──► Get L1 feedback ──► Store
+3. Evaluate ──► Send (resume text + JD) to AI ──► Get 7 scores + feedback + salary ──► Store evaluation
+4. Compare All ──► Load all evaluations for JD ──► Rank and display side-by-side
+5. Generate Questionnaire ──► Send (evaluation + resume + JD) to AI ──► Get 10-15 questions ──► Store
+6. Submit Answers ──► Send (questions + answers + context) to AI ──► Get L1 feedback ──► Store
 ```
 
 ### Scoring Dimensions

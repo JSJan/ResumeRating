@@ -37,5 +37,22 @@ prompt 4
 Want a overall comparison of all profiles uploaded 
 Not just single candidate evaluation
 
+prompt 5
 
-export GITHUB_TOKEN="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"
+why am i not able to do comparison before evaluating the profile, possible features and enhancement that can be done, can also add l2 round for hands on , system design, design thinking use cases, tradeoff in application
+
+Prompt 6
+How to enhance the functionality of the application, 
+Usability of the app and need of the hour
+
+
+Can also introduce HR and leadership rounds
+
+→ Created ENHANCEMENTS.md with 10 enhancement areas, top 5 priorities, feedback, and usability analysis
+
+--
+prompt 7 
+Create a new md for prompting feedback and what can be improved
+Create a read file to post this activity in linkedin, are there any similar projects available in the internet, can i file a patent for this
+
+https://github.com/topics/resume-screening

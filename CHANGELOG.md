@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-04-15
+
+### Added
+- **Candidate Comparison tab** — side-by-side ranking of all evaluated candidates for a JD with sortable columns, summary stats (total, recommended, avg score, top scorer), and candidate highlights
+- Configurable AI timeout via `Ai:TimeoutSeconds` in `appsettings.json` (default: 120 seconds)
+- Axios 2-minute request timeout on the frontend to match backend
+
+### Changed
+- Updated README to reference GitHub Models (GPT-4o) instead of Anthropic Claude
+- Frontend tabs now include "Compare All" between Evaluate and L1 Questionnaire
+
 ## [0.2.0] - 2026-04-15
 
 ### Changed

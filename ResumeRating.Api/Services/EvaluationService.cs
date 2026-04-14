@@ -9,9 +9,12 @@ public interface IEvaluationService
     Task<JobDescription> CreateJobDescriptionAsync(JobDescription jd);
     Task<List<JobDescription>> GetJobDescriptionsAsync();
     Task<CandidateEvaluation> EvaluateAsync(string resumeId, string jobDescriptionId);
+    Task<List<CandidateEvaluation>> EvaluateAllAsync(string jobDescriptionId);
     Task<List<CandidateEvaluation>> GetEvaluationsAsync(string jobDescriptionId);
     Task<Questionnaire> GenerateQuestionnaireAsync(string evaluationId);
     Task<L1Feedback> SubmitL1AnswersAsync(L1AnswersRequest request);
+    Task<L2Questionnaire> GenerateL2QuestionnaireAsync(string evaluationId);
+    Task<L2Assessment> SubmitL2AnswersAsync(L2AnswersRequest request);
     Task<SeedResult> SeedFromAssetsAsync();
 }
 
@@ -34,6 +37,8 @@ public class EvaluationService : IEvaluationService
     private const string EvaluationsCollection = "evaluations";
     private const string QuestionnairesCollection = "questionnaires";
     private const string L1FeedbackCollection = "l1_feedback";
+    private const string L2QuestionnairesCollection = "l2_questionnaires";
+    private const string L2AssessmentsCollection = "l2_assessments";
 
     public EvaluationService(IResumeParserService parser, IAiService ai, IStorageService storage)
     {
@@ -148,6 +153,85 @@ public class EvaluationService : IEvaluationService
         var feedback = await _ai.EvaluateL1AnswersAsync(evaluation, questionnaire, request.Answers, resume.ExtractedText, jd);
         await _storage.AppendToListAsync(L1FeedbackCollection, feedback);
         return feedback;
+    }
+
+    public async Task<List<CandidateEvaluation>> EvaluateAllAsync(string jobDescriptionId)
+    {
+        var jds = await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
+        var jd = jds.Find(j => j.Id == jobDescriptionId)
+            ?? throw new KeyNotFoundException($"Job description '{jobDescriptionId}' not found.");
+
+        var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
+        var existingEvals = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        var alreadyEvaluated = existingEvals
+            .Where(e => e.JobDescriptionId == jobDescriptionId)
+            .Select(e => e.ResumeId)
+            .ToHashSet();
+
+        var results = new List<CandidateEvaluation>();
+
+        // Only evaluate resumes that haven't been evaluated for this JD yet
+        foreach (var resume in resumes.Where(r => !alreadyEvaluated.Contains(r.Id)))
+        {
+            var evaluation = await _ai.EvaluateResumeAsync(resume.ExtractedText, jd);
+            evaluation.ResumeId = resume.Id;
+            evaluation.JobDescriptionId = jobDescriptionId;
+            await _storage.AppendToListAsync(EvaluationsCollection, evaluation);
+            results.Add(evaluation);
+        }
+
+        // Return all evaluations for this JD (existing + new)
+        var allEvals = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        return allEvals.Where(e => e.JobDescriptionId == jobDescriptionId).ToList();
+    }
+
+    public async Task<L2Questionnaire> GenerateL2QuestionnaireAsync(string evaluationId)
+    {
+        var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        var evaluation = evaluations.Find(e => e.Id == evaluationId)
+            ?? throw new KeyNotFoundException($"Evaluation '{evaluationId}' not found.");
+
+        var l1Feedbacks = await _storage.LoadListAsync<L1Feedback>(L1FeedbackCollection);
+        var l1Feedback = l1Feedbacks.Find(f => f.EvaluationId == evaluationId)
+            ?? throw new KeyNotFoundException("No L1 feedback found for this evaluation. Complete L1 round first.");
+
+        if (!l1Feedback.RecommendedForTechRound)
+            throw new InvalidOperationException("Candidate was not recommended for tech hands-on round.");
+
+        var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
+        var resume = resumes.Find(r => r.Id == evaluation.ResumeId)
+            ?? throw new KeyNotFoundException("Associated resume not found.");
+
+        var jds = await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
+        var jd = jds.Find(j => j.Id == evaluation.JobDescriptionId)
+            ?? throw new KeyNotFoundException("Associated job description not found.");
+
+        var questionnaire = await _ai.GenerateL2QuestionnaireAsync(evaluation, l1Feedback, resume.ExtractedText, jd);
+        await _storage.AppendToListAsync(L2QuestionnairesCollection, questionnaire);
+        return questionnaire;
+    }
+
+    public async Task<L2Assessment> SubmitL2AnswersAsync(L2AnswersRequest request)
+    {
+        var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        var evaluation = evaluations.Find(e => e.Id == request.EvaluationId)
+            ?? throw new KeyNotFoundException($"Evaluation '{request.EvaluationId}' not found.");
+
+        var l2Questionnaires = await _storage.LoadListAsync<L2Questionnaire>(L2QuestionnairesCollection);
+        var questionnaire = l2Questionnaires.Find(q => q.Id == request.L2QuestionnaireId)
+            ?? throw new KeyNotFoundException($"L2 Questionnaire '{request.L2QuestionnaireId}' not found.");
+
+        var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
+        var resume = resumes.Find(r => r.Id == evaluation.ResumeId)
+            ?? throw new KeyNotFoundException("Associated resume not found.");
+
+        var jds = await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
+        var jd = jds.Find(j => j.Id == evaluation.JobDescriptionId)
+            ?? throw new KeyNotFoundException("Associated job description not found.");
+
+        var assessment = await _ai.EvaluateL2AnswersAsync(evaluation, questionnaire, request, resume.ExtractedText, jd);
+        await _storage.AppendToListAsync(L2AssessmentsCollection, assessment);
+        return assessment;
     }
 
     private static string ExtractNameHeuristic(string text)

@@ -91,6 +91,55 @@ public class EvaluationController : ControllerBase
         }
     }
 
+    [HttpPost("evaluate-all/{jobDescriptionId}")]
+    public async Task<IActionResult> EvaluateAll(string jobDescriptionId)
+    {
+        try
+        {
+            var evaluations = await _evaluationService.EvaluateAllAsync(jobDescriptionId);
+            return Ok(evaluations);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
+
+    [HttpPost("l2-questionnaire/{evaluationId}")]
+    public async Task<IActionResult> GenerateL2Questionnaire(string evaluationId)
+    {
+        try
+        {
+            var questionnaire = await _evaluationService.GenerateL2QuestionnaireAsync(evaluationId);
+            return Ok(questionnaire);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    [HttpPost("l2-feedback")]
+    public async Task<IActionResult> SubmitL2Answers([FromBody] L2AnswersRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.EvaluationId) || string.IsNullOrWhiteSpace(request.L2QuestionnaireId))
+            return BadRequest("EvaluationId and L2QuestionnaireId are required.");
+
+        try
+        {
+            var assessment = await _evaluationService.SubmitL2AnswersAsync(request);
+            return Ok(assessment);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
+
     public class EvaluateRequest
     {
         public string ResumeId { get; set; } = string.Empty;

@@ -1,22 +1,24 @@
 # Resume Rating System
 
-AI-powered resume evaluation and interview preparation tool built with **.NET 9 Web API**, **React + TypeScript**, and **Anthropic Claude**.
+AI-powered resume evaluation and interview preparation tool built with **.NET 9 Web API**, **React + TypeScript**, and **GitHub Models (GPT-4o)**.
 
 ## Features
 
 - **Resume Parsing** — Parse PDF, DOCX, and TXT resumes with iText7 and OpenXml
-- **AI Evaluation** — Rate candidates on 7 dimensions using Claude (experience, work history, education, side projects, job fit, aww factor, uniqueness)
+- **AI Evaluation** — Rate candidates on 7 dimensions using GPT-4o (experience, work history, education, side projects, job fit, aww factor, uniqueness)
+- **Candidate Comparison** — Side-by-side ranking of all evaluated candidates with sortable scores, summary stats, and highlights
 - **Salary Estimation** — Estimate current package, role, and expected salary
 - **L1 Questionnaire** — Auto-generate personalized interview questions for recommended candidates
 - **L1 Feedback** — Evaluate interview answers and get tech hands-on round recommendations
 - **Seed Data** — One-click loading of sample resumes from `assets/` folder
+- **Configurable Timeout** — AI call timeout configurable via `Ai:TimeoutSeconds` (default: 120s)
 
 ## Quick Start
 
 ```bash
-# 1. Set your Anthropic API key
+# 1. Set your GitHub PAT (models access)
 cd ResumeRating.Api
-export Anthropic__ApiKey="sk-ant-your-key-here"
+dotnet user-secrets set "GitHub:Token" "your-github-pat"
 
 # 2. Start backend
 dotnet run
@@ -60,8 +62,9 @@ See [LOCAL_SETUP.md](LOCAL_SETUP.md) for detailed setup instructions.
 1. **Upload** resumes (or click **Load Sample Data**)
 2. **Create** a job description with required/preferred skills
 3. **Evaluate** each resume against the JD — get scores, feedback, and salary estimates
-4. **Generate questionnaire** for candidates recommended for L1
-5. **Submit answers** from the L1 interview to get detailed feedback and tech round recommendations
+4. **Compare All** — view all evaluated candidates ranked side-by-side with sortable scores
+5. **Generate questionnaire** for candidates recommended for L1
+6. **Submit answers** from the L1 interview to get detailed feedback and tech round recommendations
 
 ## License
 

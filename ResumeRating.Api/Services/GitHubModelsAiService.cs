@@ -9,9 +9,11 @@ namespace ResumeRating.Api.Services;
 public class GitHubModelsAiService : IAiService
 {
     private readonly ChatClient _chatClient;
+    private readonly int _timeoutSeconds;
 
     public GitHubModelsAiService(IConfiguration configuration)
     {
+        _timeoutSeconds = configuration.GetValue("Ai:TimeoutSeconds", 120);
         var token = configuration["GitHub:Token"]
             ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
             ?? throw new InvalidOperationException("GitHub:Token is not configured. Set it in appsettings.json, user-secrets, or GITHUB_TOKEN env var.");
@@ -193,6 +195,212 @@ public class GitHubModelsAiService : IAiService
         return parsed;
     }
 
+    public async Task<L2Questionnaire> GenerateL2QuestionnaireAsync(
+        CandidateEvaluation evaluation,
+        L1Feedback l1Feedback,
+        string resumeText,
+        JobDescription jobDescription)
+    {
+        var areasToProbe = string.Join(", ", l1Feedback.AreasToProbeInTechRound);
+
+        var prompt = $$"""
+            You are a senior technical architect preparing an L2 tech hands-on round for a candidate who passed L1.
+
+            ## Candidate Profile
+            **Name:** {{evaluation.CandidateName}}
+            **Overall Resume Score:** {{evaluation.OverallScore}}/10
+            **L1 Score:** {{l1Feedback.OverallL1Score}}/10
+            **L1 Feedback:** {{l1Feedback.OverallL1Feedback}}
+            **Areas to Probe:** {{areasToProbe}}
+            **Tech Round Recommendation:** {{l1Feedback.TechHandsOnRecommendation}}
+
+            ## Job Description
+            **Title:** {{jobDescription.Title}}
+            **Required Skills:** {{jobDescription.RequiredSkills}}
+            **Experience Level:** {{jobDescription.ExperienceLevel}}
+
+            ## Resume
+            {{resumeText}}
+
+            ## Instructions
+            Generate 4 challenges tailored to this candidate:
+
+            1. **System Design** — A real-world system design problem relevant to the job role. Should test scalability, architecture patterns, and component design.
+            2. **Hands-On Coding** — A coding problem that tests practical implementation skills in their claimed tech stack. Include clear input/output expectations.
+            3. **Design Thinking** — A product/UX design thinking scenario that tests user empathy, problem framing, and solution ideation.
+            4. **Trade-Off Analysis** — A scenario requiring the candidate to analyze and justify technology/architecture trade-offs (e.g., SQL vs NoSQL, monolith vs microservices, consistency vs availability).
+
+            Respond in this exact JSON format:
+            {
+                "systemDesign": {
+                    "scenario": "<detailed problem statement>",
+                    "expectedApproach": "<what a strong answer looks like>",
+                    "evaluationCriteria": ["<criterion1>", "<criterion2>", "<criterion3>"]
+                },
+                "handsOnCoding": {
+                    "scenario": "<detailed coding problem>",
+                    "expectedApproach": "<expected solution approach>",
+                    "evaluationCriteria": ["<criterion1>", "<criterion2>", "<criterion3>"]
+                },
+                "designThinking": {
+                    "scenario": "<design thinking scenario>",
+                    "expectedApproach": "<expected approach>",
+                    "evaluationCriteria": ["<criterion1>", "<criterion2>", "<criterion3>"]
+                },
+                "tradeOffAnalysis": {
+                    "scenario": "<trade-off scenario>",
+                    "expectedApproach": "<expected analysis>",
+                    "evaluationCriteria": ["<criterion1>", "<criterion2>", "<criterion3>"]
+                }
+            }
+
+            Make challenges specific to the candidate's experience and the job requirements. Respond ONLY with the JSON object.
+            """;
+
+        var response = await CallAsync(prompt);
+        var parsed = JsonConvert.DeserializeObject<L2QuestionnaireResponse>(response)
+            ?? throw new InvalidOperationException("Failed to parse L2 questionnaire response.");
+
+        return new L2Questionnaire
+        {
+            EvaluationId = evaluation.Id,
+            L1FeedbackId = l1Feedback.Id,
+            CandidateName = evaluation.CandidateName,
+            SystemDesign = parsed.SystemDesign,
+            HandsOnCoding = parsed.HandsOnCoding,
+            DesignThinking = parsed.DesignThinking,
+            TradeOffAnalysis = parsed.TradeOffAnalysis
+        };
+    }
+
+    public async Task<L2Assessment> EvaluateL2AnswersAsync(
+        CandidateEvaluation evaluation,
+        L2Questionnaire questionnaire,
+        L2AnswersRequest answers,
+        string resumeText,
+        JobDescription jobDescription)
+    {
+        var prompt = $$"""
+            You are a senior technical architect evaluating L2 tech hands-on round answers. Provide thorough, honest assessment.
+
+            ## Candidate
+            **Name:** {{evaluation.CandidateName}}
+            **Resume Score:** {{evaluation.OverallScore}}/10
+
+            ## Job Description
+            **Title:** {{jobDescription.Title}}
+            **Required Skills:** {{jobDescription.RequiredSkills}}
+
+            ## Challenge 1: System Design
+            **Scenario:** {{questionnaire.SystemDesign.Scenario}}
+            **Expected Approach:** {{questionnaire.SystemDesign.ExpectedApproach}}
+            **Candidate's Answer:** {{answers.SystemDesignAnswer}}
+
+            ## Challenge 2: Hands-On Coding
+            **Scenario:** {{questionnaire.HandsOnCoding.Scenario}}
+            **Expected Approach:** {{questionnaire.HandsOnCoding.ExpectedApproach}}
+            **Candidate's Answer:** {{answers.HandsOnCodingAnswer}}
+
+            ## Challenge 3: Design Thinking
+            **Scenario:** {{questionnaire.DesignThinking.Scenario}}
+            **Expected Approach:** {{questionnaire.DesignThinking.ExpectedApproach}}
+            **Candidate's Answer:** {{answers.DesignThinkingAnswer}}
+
+            ## Challenge 4: Trade-Off Analysis
+            **Scenario:** {{questionnaire.TradeOffAnalysis.Scenario}}
+            **Expected Approach:** {{questionnaire.TradeOffAnalysis.ExpectedApproach}}
+            **Candidate's Answer:** {{answers.TradeOffAnalysisAnswer}}
+
+            ## Instructions
+            Evaluate each challenge response and provide a final hiring recommendation. Use this scale:
+            - **Strong Hire** (8-10): Exceptional across all areas
+            - **Hire** (6-7): Good with minor gaps
+            - **Lean No Hire** (4-5): Significant concerns
+            - **No Hire** (1-3): Does not meet requirements
+
+            Respond in this exact JSON format:
+            {
+                "systemDesign": {
+                    "score": <1-10>,
+                    "feedback": "<detailed feedback>"
+                },
+                "handsOnCoding": {
+                    "score": <1-10>,
+                    "feedback": "<detailed feedback>"
+                },
+                "designThinking": {
+                    "score": <1-10>,
+                    "feedback": "<detailed feedback>"
+                },
+                "tradeOffAnalysis": {
+                    "score": <1-10>,
+                    "feedback": "<detailed feedback>"
+                },
+                "overallL2Score": <1-10>,
+                "overallL2Feedback": "<comprehensive assessment>",
+                "strengths": "<key strengths demonstrated>",
+                "weaknesses": "<areas of concern>",
+                "hiringRecommendation": "Strong Hire|Hire|Lean No Hire|No Hire",
+                "recommendedForHire": <true/false>
+            }
+
+            Be thorough and constructive. Respond ONLY with the JSON object.
+            """;
+
+        var response = await CallAsync(prompt);
+        var parsed = JsonConvert.DeserializeObject<L2AssessmentResponse>(response)
+            ?? throw new InvalidOperationException("Failed to parse L2 assessment response.");
+
+        return new L2Assessment
+        {
+            EvaluationId = evaluation.Id,
+            L1FeedbackId = questionnaire.L1FeedbackId,
+            CandidateName = evaluation.CandidateName,
+            SystemDesign = new L2Challenge
+            {
+                Scenario = questionnaire.SystemDesign.Scenario,
+                ExpectedApproach = questionnaire.SystemDesign.ExpectedApproach,
+                EvaluationCriteria = questionnaire.SystemDesign.EvaluationCriteria,
+                CandidateResponse = answers.SystemDesignAnswer,
+                Score = parsed.SystemDesign.Score,
+                Feedback = parsed.SystemDesign.Feedback
+            },
+            HandsOnCoding = new L2Challenge
+            {
+                Scenario = questionnaire.HandsOnCoding.Scenario,
+                ExpectedApproach = questionnaire.HandsOnCoding.ExpectedApproach,
+                EvaluationCriteria = questionnaire.HandsOnCoding.EvaluationCriteria,
+                CandidateResponse = answers.HandsOnCodingAnswer,
+                Score = parsed.HandsOnCoding.Score,
+                Feedback = parsed.HandsOnCoding.Feedback
+            },
+            DesignThinking = new L2Challenge
+            {
+                Scenario = questionnaire.DesignThinking.Scenario,
+                ExpectedApproach = questionnaire.DesignThinking.ExpectedApproach,
+                EvaluationCriteria = questionnaire.DesignThinking.EvaluationCriteria,
+                CandidateResponse = answers.DesignThinkingAnswer,
+                Score = parsed.DesignThinking.Score,
+                Feedback = parsed.DesignThinking.Feedback
+            },
+            TradeOffAnalysis = new L2Challenge
+            {
+                Scenario = questionnaire.TradeOffAnalysis.Scenario,
+                ExpectedApproach = questionnaire.TradeOffAnalysis.ExpectedApproach,
+                EvaluationCriteria = questionnaire.TradeOffAnalysis.EvaluationCriteria,
+                CandidateResponse = answers.TradeOffAnalysisAnswer,
+                Score = parsed.TradeOffAnalysis.Score,
+                Feedback = parsed.TradeOffAnalysis.Feedback
+            },
+            OverallL2Score = parsed.OverallL2Score,
+            OverallL2Feedback = parsed.OverallL2Feedback,
+            Strengths = parsed.Strengths,
+            Weaknesses = parsed.Weaknesses,
+            HiringRecommendation = parsed.HiringRecommendation,
+            RecommendedForHire = parsed.RecommendedForHire
+        };
+    }
+
     private async Task<string> CallAsync(string prompt)
     {
         var messages = new List<ChatMessage>
@@ -201,7 +409,8 @@ public class GitHubModelsAiService : IAiService
             new UserChatMessage(prompt)
         };
 
-        var completion = await _chatClient.CompleteChatAsync(messages);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
+        var completion = await _chatClient.CompleteChatAsync(messages, cancellationToken: cts.Token);
         var content = completion.Value.Content[0].Text;
 
         // Strip markdown code fences if present
@@ -221,5 +430,33 @@ public class GitHubModelsAiService : IAiService
     private class QuestionnaireResponse
     {
         public List<Question> Questions { get; set; } = [];
+    }
+
+    private class L2QuestionnaireResponse
+    {
+        public L2ChallengePrompt SystemDesign { get; set; } = new();
+        public L2ChallengePrompt HandsOnCoding { get; set; } = new();
+        public L2ChallengePrompt DesignThinking { get; set; } = new();
+        public L2ChallengePrompt TradeOffAnalysis { get; set; } = new();
+    }
+
+    private class L2ChallengeScoreResponse
+    {
+        public int Score { get; set; }
+        public string Feedback { get; set; } = string.Empty;
+    }
+
+    private class L2AssessmentResponse
+    {
+        public L2ChallengeScoreResponse SystemDesign { get; set; } = new();
+        public L2ChallengeScoreResponse HandsOnCoding { get; set; } = new();
+        public L2ChallengeScoreResponse DesignThinking { get; set; } = new();
+        public L2ChallengeScoreResponse TradeOffAnalysis { get; set; } = new();
+        public int OverallL2Score { get; set; }
+        public string OverallL2Feedback { get; set; } = string.Empty;
+        public string Strengths { get; set; } = string.Empty;
+        public string Weaknesses { get; set; } = string.Empty;
+        public string HiringRecommendation { get; set; } = string.Empty;
+        public bool RecommendedForHire { get; set; }
     }
 }
