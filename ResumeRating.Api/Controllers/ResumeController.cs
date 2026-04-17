@@ -16,7 +16,7 @@ public class ResumeController : ControllerBase
 
     [HttpPost("upload")]
     [RequestSizeLimit(10 * 1024 * 1024)] // 10MB max
-    public async Task<IActionResult> Upload(IFormFile file)
+    public async Task<IActionResult> Upload(IFormFile file, [FromForm] string? linkedInUrl = null, [FromForm] string? gitHubUsername = null)
     {
         if (file == null || file.Length == 0)
             return BadRequest("No file uploaded.");
@@ -27,7 +27,7 @@ public class ResumeController : ControllerBase
             return BadRequest("Only PDF, DOCX, and TXT files are supported.");
 
         using var stream = file.OpenReadStream();
-        var resume = await _evaluationService.UploadResumeAsync(stream, file.FileName);
+        var resume = await _evaluationService.UploadResumeAsync(stream, file.FileName, linkedInUrl, gitHubUsername);
         return Ok(resume);
     }
 
@@ -41,6 +41,8 @@ public class ResumeController : ControllerBase
             r.Id,
             r.FileName,
             r.CandidateName,
+            r.LinkedInUrl,
+            r.GitHubUsername,
             r.UploadedAt
         });
         return Ok(summaries);

@@ -21,6 +21,8 @@ const App: React.FC = () => {
 
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [linkedInUrl, setLinkedInUrl] = useState('');
+  const [gitHubUsername, setGitHubUsername] = useState('');
 
   // JD state
   const [jdForm, setJdForm] = useState({ title: '', description: '', requiredSkills: '', preferredSkills: '', experienceLevel: '' });
@@ -54,10 +56,12 @@ const App: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      await uploadResume(selectedFile);
+      await uploadResume(selectedFile, linkedInUrl || undefined, gitHubUsername || undefined);
       const res = await getResumes();
       setResumes(res.data);
       setSelectedFile(null);
+      setLinkedInUrl('');
+      setGitHubUsername('');
     } catch (e) { handleError(e); }
     setLoading(false);
   };
@@ -264,6 +268,12 @@ const App: React.FC = () => {
             <input type="file" accept=".pdf,.docx,.txt" onChange={e => setSelectedFile(e.target.files?.[0] || null)} />
             <p style={{ color: '#9ca3af', marginTop: 8 }}>Supported: PDF, DOCX, TXT (max 10MB)</p>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            <input placeholder="LinkedIn URL (optional)" value={linkedInUrl} onChange={e => setLinkedInUrl(e.target.value)}
+              style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8 }} />
+            <input placeholder="GitHub Username (optional)" value={gitHubUsername} onChange={e => setGitHubUsername(e.target.value)}
+              style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8 }} />
+          </div>
           <button onClick={handleUpload} disabled={!selectedFile || loading}
             style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: !selectedFile || loading ? 0.5 : 1 }}>
             {loading ? 'Uploading...' : 'Upload Resume'}
@@ -277,6 +287,8 @@ const App: React.FC = () => {
                   <tr style={{ background: '#f9fafb' }}>
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Name</th>
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>File</th>
+                    <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>LinkedIn</th>
+                    <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>GitHub</th>
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Uploaded</th>
                   </tr>
                 </thead>
@@ -285,6 +297,12 @@ const App: React.FC = () => {
                     <tr key={r.id}>
                       <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>{r.candidateName}</td>
                       <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>{r.fileName}</td>
+                      <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>
+                        {r.linkedInUrl ? <a href={r.linkedInUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#0077b5' }}>Profile</a> : <span style={{ color: '#9ca3af' }}>—</span>}
+                      </td>
+                      <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>
+                        {r.gitHubUsername ? <a href={`https://github.com/${r.gitHubUsername}`} target="_blank" rel="noopener noreferrer" style={{ color: '#333' }}>{r.gitHubUsername}</a> : <span style={{ color: '#9ca3af' }}>—</span>}
+                      </td>
                       <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>{new Date(r.uploadedAt).toLocaleDateString()}</td>
                     </tr>
                   ))}
@@ -370,6 +388,8 @@ const App: React.FC = () => {
               <ScoreBar label="Job Fit" score={currentEvaluation.jobFitScore} feedback={currentEvaluation.jobFitFeedback} />
               <ScoreBar label="Aww Factor" score={currentEvaluation.awwFactorScore} feedback={currentEvaluation.awwFactorFeedback} />
               <ScoreBar label="Uniqueness" score={currentEvaluation.uniquenessFactor} feedback={currentEvaluation.uniquenessFeedback} />
+              <ScoreBar label="GitHub Activity" score={currentEvaluation.gitHubScore} feedback={currentEvaluation.gitHubFeedback} />
+              <ScoreBar label="Online Presence" score={currentEvaluation.onlinePresenceScore} feedback={currentEvaluation.onlinePresenceFeedback} />
 
               <div style={{ background: '#f9fafb', borderRadius: 8, padding: 16, marginTop: 16 }}>
                 <h4>What Sets Them Apart</h4>

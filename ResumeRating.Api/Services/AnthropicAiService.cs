@@ -8,7 +8,7 @@ namespace ResumeRating.Api.Services;
 
 public interface IAiService
 {
-    Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription);
+    Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription, string? linkedInUrl = null, string? gitHubSummary = null, string? codeAnalysis = null);
     Task<Questionnaire> GenerateQuestionnaireAsync(CandidateEvaluation evaluation, string resumeText, JobDescription jobDescription);
     Task<L1Feedback> EvaluateL1AnswersAsync(CandidateEvaluation evaluation, Questionnaire questionnaire, List<CandidateAnswer> answers, string resumeText, JobDescription jobDescription);
     Task<L2Questionnaire> GenerateL2QuestionnaireAsync(CandidateEvaluation evaluation, L1Feedback l1Feedback, string resumeText, JobDescription jobDescription);
@@ -28,7 +28,7 @@ public class AnthropicAiService : IAiService
         _client = new AnthropicClient(new APIAuthentication(apiKey));
     }
 
-    public async Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription)
+    public async Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription, string? linkedInUrl = null, string? gitHubSummary = null, string? codeAnalysis = null)
     {
         var prompt = $$"""
             You are an expert technical recruiter and hiring manager. Evaluate the following resume against the provided job description.

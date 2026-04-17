@@ -9,6 +9,8 @@ export interface Resume {
   id: string;
   fileName: string;
   candidateName: string;
+  linkedInUrl: string;
+  gitHubUsername: string;
   uploadedAt: string;
 }
 
@@ -33,6 +35,8 @@ export interface CandidateEvaluation {
   jobFitScore: number;
   awwFactorScore: number;
   uniquenessFactor: number;
+  gitHubScore: number;
+  onlinePresenceScore: number;
   overallScore: number;
   experienceFeedback: string;
   workHistoryFeedback: string;
@@ -41,6 +45,8 @@ export interface CandidateEvaluation {
   jobFitFeedback: string;
   awwFactorFeedback: string;
   uniquenessFeedback: string;
+  gitHubFeedback: string;
+  onlinePresenceFeedback: string;
   overallFeedback: string;
   standout: string;
   estimatedCurrentPackage: string;
@@ -86,9 +92,11 @@ export interface L1Feedback {
 }
 
 // Resume APIs
-export const uploadResume = (file: File) => {
+export const uploadResume = (file: File, linkedInUrl?: string, gitHubUsername?: string) => {
   const formData = new FormData();
   formData.append('file', file);
+  if (linkedInUrl) formData.append('linkedInUrl', linkedInUrl);
+  if (gitHubUsername) formData.append('gitHubUsername', gitHubUsername);
   return api.post<Resume>('/resume/upload', formData);
 };
 

@@ -11,6 +11,7 @@ Step-by-step instructions to get the Resume Rating System running on your machin
 | Anthropic API Key | — | [Get key](https://console.anthropic.com/settings/keys) |
 
 Verify installations:
+
 ```bash
 dotnet --version    # Should show 9.x
 node --version      # Should show 18.x+
@@ -27,6 +28,7 @@ cd ResumeRating
 ## 2. Configure the API Key
 
 **Option A — Environment variable (recommended):**
+
 ```bash
 export Anthropic__ApiKey="sk-ant-your-key-here"
 ```
@@ -34,6 +36,7 @@ export Anthropic__ApiKey="sk-ant-your-key-here"
 **Option B — appsettings.json:**
 
 Edit `ResumeRating.Api/appsettings.json`:
+
 ```json
 {
   "Anthropic": {
@@ -44,6 +47,7 @@ Edit `ResumeRating.Api/appsettings.json`:
 ```
 
 **Option C — .NET User Secrets (most secure for local dev):**
+
 ```bash
 cd ResumeRating.Api
 dotnet user-secrets init
@@ -60,12 +64,14 @@ dotnet run
 ```
 
 You should see:
+
 ```
 Now listening on: http://localhost:5073
 Application started.
 ```
 
 Verify it's working:
+
 ```bash
 curl http://localhost:5073/api/resume
 # Should return: []
@@ -74,6 +80,7 @@ curl http://localhost:5073/api/resume
 ## 4. Run the Frontend
 
 In a **new terminal**:
+
 ```bash
 cd resume-rating-ui
 npm install --legacy-peer-deps
@@ -85,6 +92,7 @@ The app opens at `http://localhost:3000`.
 ## 5. Load Sample Data
 
 Either:
+
 - Click **"Load Sample Data"** button in the UI header, or
 - Run: `curl -X POST http://localhost:5073/api/evaluation/seed`
 
@@ -93,6 +101,7 @@ This loads the 7 sample resumes from `assets/` and the job description from `ass
 ## Changing the AI Model
 
 Edit `appsettings.json` or set via environment variable:
+
 ```bash
 export Anthropic__Model="claude-sonnet-4-20250514"
 ```
@@ -102,6 +111,7 @@ Available models: `claude-sonnet-4-20250514`, `claude-opus-4-20250514`, `claude-
 ## Data Storage
 
 All data is stored as JSON files in `ResumeRating.Api/App_Data/`:
+
 - `resumes.json` — Uploaded resumes with extracted text
 - `job_descriptions.json` — Job descriptions
 - `evaluations.json` — AI evaluation results

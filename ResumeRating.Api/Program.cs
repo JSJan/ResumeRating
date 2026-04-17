@@ -9,6 +9,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IStorageService, FileStorageService>();
 builder.Services.AddSingleton<IResumeParserService, ResumeParserService>();
 builder.Services.AddSingleton<IAiService, GitHubModelsAiService>();
+builder.Services.AddSingleton<IGitHubProfileService, GitHubProfileService>();
 builder.Services.AddScoped<IEvaluationService, EvaluationService>();
 
 // CORS for React frontend

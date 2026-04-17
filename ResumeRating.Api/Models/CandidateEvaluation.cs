@@ -15,6 +15,12 @@ public class CandidateEvaluation
     public int JobFitScore { get; set; }
     public int AwwFactorScore { get; set; }
     public int UniquenessFactor { get; set; }
+    public int GitHubScore { get; set; }
+    public int OnlinePresenceScore { get; set; }
+    public int CodeProficiencyScore { get; set; }
+    public int ResumeAuthenticityScore { get; set; }
+    public int BuzzwordScore { get; set; }
+    public int AiGeneratedScore { get; set; }
     public int OverallScore { get; set; }
 
     // Detailed feedback
@@ -25,7 +31,18 @@ public class CandidateEvaluation
     public string JobFitFeedback { get; set; } = string.Empty;
     public string AwwFactorFeedback { get; set; } = string.Empty;
     public string UniquenessFeedback { get; set; } = string.Empty;
+    public string GitHubFeedback { get; set; } = string.Empty;
+    public string OnlinePresenceFeedback { get; set; } = string.Empty;
+    public string CodeProficiencyFeedback { get; set; } = string.Empty;
+    public string ResumeAuthenticityFeedback { get; set; } = string.Empty;
+    public string BuzzwordFeedback { get; set; } = string.Empty;
+    public string AiGeneratedFeedback { get; set; } = string.Empty;
     public string OverallFeedback { get; set; } = string.Empty;
+
+    // Resume tailoring detection details
+    public List<string> TailoringRedFlags { get; set; } = [];
+    public List<string> BuzzwordsDetected { get; set; } = [];
+    public string AuthenticityAnalysis { get; set; } = string.Empty;
 
     // What sets them apart
     public string Standout { get; set; } = string.Empty;
