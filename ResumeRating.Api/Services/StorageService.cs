@@ -8,6 +8,7 @@ public interface IStorageService
     Task SaveAsync<T>(string key, T data) where T : class;
     Task<List<T>> LoadListAsync<T>(string collectionName) where T : class;
     Task AppendToListAsync<T>(string collectionName, T item) where T : class;
+    Task SaveListAsync<T>(string collectionName, List<T> items) where T : class;
     Task SaveFileAsync(string fileName, Stream content);
     string GetUploadPath(string fileName);
 }
@@ -54,6 +55,11 @@ public class FileStorageService : IStorageService
         var list = await LoadListAsync<T>(collectionName);
         list.Add(item);
         await SaveAsync(collectionName, list);
+    }
+
+    public async Task SaveListAsync<T>(string collectionName, List<T> items) where T : class
+    {
+        await SaveAsync(collectionName, items);
     }
 
     public async Task SaveFileAsync(string fileName, Stream content)

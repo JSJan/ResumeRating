@@ -6,11 +6,14 @@ public interface IEvaluationService
 {
     Task<Resume> UploadResumeAsync(Stream fileStream, string fileName, string? linkedInUrl = null, string? gitHubUsername = null);
     Task<List<Resume>> GetResumesAsync();
+    Task DeleteResumeAsync(string resumeId);
     Task<JobDescription> CreateJobDescriptionAsync(JobDescription jd);
     Task<List<JobDescription>> GetJobDescriptionsAsync();
+    Task DeleteJobDescriptionAsync(string jobDescriptionId);
     Task<CandidateEvaluation> EvaluateAsync(string resumeId, string jobDescriptionId);
     Task<List<CandidateEvaluation>> EvaluateAllAsync(string jobDescriptionId);
     Task<List<CandidateEvaluation>> GetEvaluationsAsync(string jobDescriptionId);
+    Task DeleteEvaluationAsync(string evaluationId);
     Task<Questionnaire> GenerateQuestionnaireAsync(string evaluationId);
     Task<L1Feedback> SubmitL1AnswersAsync(L1AnswersRequest request);
     Task<L2Questionnaire> GenerateL2QuestionnaireAsync(string evaluationId);
@@ -32,6 +35,7 @@ public class EvaluationService : IEvaluationService
     private readonly IAiService _ai;
     private readonly IStorageService _storage;
     private readonly IGitHubProfileService _gitHub;
+    private readonly IResumeAnalysisService _analysis;
 
     private const string ResumesCollection = "resumes";
     private const string JobDescriptionsCollection = "job_descriptions";
@@ -41,12 +45,13 @@ public class EvaluationService : IEvaluationService
     private const string L2QuestionnairesCollection = "l2_questionnaires";
     private const string L2AssessmentsCollection = "l2_assessments";
 
-    public EvaluationService(IResumeParserService parser, IAiService ai, IStorageService storage, IGitHubProfileService gitHub)
+    public EvaluationService(IResumeParserService parser, IAiService ai, IStorageService storage, IGitHubProfileService gitHub, IResumeAnalysisService analysis)
     {
         _parser = parser;
         _ai = ai;
         _storage = storage;
         _gitHub = gitHub;
+        _analysis = analysis;
     }
 
     public async Task<Resume> UploadResumeAsync(Stream fileStream, string fileName, string? linkedInUrl = null, string? gitHubUsername = null)
@@ -90,6 +95,19 @@ public class EvaluationService : IEvaluationService
         return await _storage.LoadListAsync<Resume>(ResumesCollection);
     }
 
+    public async Task DeleteResumeAsync(string resumeId)
+    {
+        var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
+        var removed = resumes.RemoveAll(r => r.Id == resumeId);
+        if (removed == 0) throw new KeyNotFoundException($"Resume '{resumeId}' not found.");
+        await _storage.SaveListAsync(ResumesCollection, resumes);
+
+        // Also remove any evaluations for this resume
+        var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        evaluations.RemoveAll(e => e.ResumeId == resumeId);
+        await _storage.SaveListAsync(EvaluationsCollection, evaluations);
+    }
+
     public async Task<JobDescription> CreateJobDescriptionAsync(JobDescription jd)
     {
         jd.Id = Guid.NewGuid().ToString();
@@ -103,6 +121,19 @@ public class EvaluationService : IEvaluationService
         return await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
     }
 
+    public async Task DeleteJobDescriptionAsync(string jobDescriptionId)
+    {
+        var jds = await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
+        var removed = jds.RemoveAll(j => j.Id == jobDescriptionId);
+        if (removed == 0) throw new KeyNotFoundException($"Job description '{jobDescriptionId}' not found.");
+        await _storage.SaveListAsync(JobDescriptionsCollection, jds);
+
+        // Also remove any evaluations for this JD
+        var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        evaluations.RemoveAll(e => e.JobDescriptionId == jobDescriptionId);
+        await _storage.SaveListAsync(EvaluationsCollection, evaluations);
+    }
+
     public async Task<CandidateEvaluation> EvaluateAsync(string resumeId, string jobDescriptionId)
     {
         var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
@@ -112,6 +143,12 @@ public class EvaluationService : IEvaluationService
         var jds = await _storage.LoadListAsync<JobDescription>(JobDescriptionsCollection);
         var jd = jds.Find(j => j.Id == jobDescriptionId)
             ?? throw new KeyNotFoundException($"Job description '{jobDescriptionId}' not found.");
+
+        // Return existing evaluation if already evaluated for this JD
+        var existingEvals = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        var existing = existingEvals.Find(e => e.ResumeId == resumeId && e.JobDescriptionId == jobDescriptionId);
+        if (existing != null)
+            return existing;
 
         // Refresh GitHub data if username exists but summary is empty
         if (!string.IsNullOrWhiteSpace(resume.GitHubUsername) && string.IsNullOrWhiteSpace(resume.GitHubProfileSummary))
@@ -138,12 +175,27 @@ public class EvaluationService : IEvaluationService
             catch { /* code analysis is best-effort */ }
         }
 
+        // Pre-compute local analysis to reduce AI token usage
+        var preAnalysis = _analysis.Analyze(resume.ExtractedText, jd.Description, jd.RequiredSkills, jd.PreferredSkills);
+        GitHubSkillMatch? gitHubSkillMatch = null;
+        if (!string.IsNullOrWhiteSpace(resume.GitHubUsername))
+        {
+            try
+            {
+                var profile = await _gitHub.FetchProfileAsync(resume.GitHubUsername);
+                gitHubSkillMatch = _analysis.ComputeGitHubSkillMatch(profile, jd.RequiredSkills, jd.PreferredSkills);
+            }
+            catch { /* best-effort */ }
+        }
+
         var evaluation = await _ai.EvaluateResumeAsync(
             resume.ExtractedText,
             jd,
             string.IsNullOrWhiteSpace(resume.LinkedInUrl) ? null : resume.LinkedInUrl,
             string.IsNullOrWhiteSpace(resume.GitHubProfileSummary) ? null : resume.GitHubProfileSummary,
-            codeAnalysisSummary);
+            codeAnalysisSummary,
+            preAnalysis,
+            gitHubSkillMatch);
         evaluation.ResumeId = resumeId;
         evaluation.JobDescriptionId = jobDescriptionId;
 
@@ -154,7 +206,28 @@ public class EvaluationService : IEvaluationService
     public async Task<List<CandidateEvaluation>> GetEvaluationsAsync(string jobDescriptionId)
     {
         var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
-        return evaluations.Where(e => e.JobDescriptionId == jobDescriptionId).ToList();
+
+        // Deduplicate: keep only the first evaluation per resume+JD combo
+        var seen = new HashSet<string>();
+        var deduped = new List<CandidateEvaluation>();
+        foreach (var ev in evaluations)
+        {
+            var key = $"{ev.ResumeId}:{ev.JobDescriptionId}";
+            if (seen.Add(key))
+                deduped.Add(ev);
+        }
+        if (deduped.Count < evaluations.Count)
+            await _storage.SaveListAsync(EvaluationsCollection, deduped);
+
+        return deduped.Where(e => e.JobDescriptionId == jobDescriptionId).ToList();
+    }
+
+    public async Task DeleteEvaluationAsync(string evaluationId)
+    {
+        var evaluations = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+        var removed = evaluations.RemoveAll(e => e.Id == evaluationId);
+        if (removed == 0) throw new KeyNotFoundException($"Evaluation '{evaluationId}' not found.");
+        await _storage.SaveListAsync(EvaluationsCollection, evaluations);
     }
 
     public async Task<Questionnaire> GenerateQuestionnaireAsync(string evaluationId)
@@ -210,7 +283,20 @@ public class EvaluationService : IEvaluationService
 
         var resumes = await _storage.LoadListAsync<Resume>(ResumesCollection);
         var existingEvals = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
-        var alreadyEvaluated = existingEvals
+
+        // Deduplicate existing evaluations — keep only the first per resume+JD combo
+        var seen = new HashSet<string>();
+        var deduped = new List<CandidateEvaluation>();
+        foreach (var ev in existingEvals)
+        {
+            var key = $"{ev.ResumeId}:{ev.JobDescriptionId}";
+            if (seen.Add(key))
+                deduped.Add(ev);
+        }
+        if (deduped.Count < existingEvals.Count)
+            await _storage.SaveListAsync(EvaluationsCollection, deduped);
+
+        var alreadyEvaluated = deduped
             .Where(e => e.JobDescriptionId == jobDescriptionId)
             .Select(e => e.ResumeId)
             .ToHashSet();
@@ -242,14 +328,39 @@ public class EvaluationService : IEvaluationService
                 catch { /* best-effort */ }
             }
 
+            // Pre-compute local analysis to reduce AI token usage
+            var preAnalysis = _analysis.Analyze(resume.ExtractedText, jd.Description, jd.RequiredSkills, jd.PreferredSkills);
+            GitHubSkillMatch? gitHubSkillMatch = null;
+            if (!string.IsNullOrWhiteSpace(resume.GitHubUsername))
+            {
+                try
+                {
+                    var profile = await _gitHub.FetchProfileAsync(resume.GitHubUsername);
+                    gitHubSkillMatch = _analysis.ComputeGitHubSkillMatch(profile, jd.RequiredSkills, jd.PreferredSkills);
+                }
+                catch { /* best-effort */ }
+            }
+
             var evaluation = await _ai.EvaluateResumeAsync(
                 resume.ExtractedText,
                 jd,
                 string.IsNullOrWhiteSpace(resume.LinkedInUrl) ? null : resume.LinkedInUrl,
                 gitHubSummary,
-                codeAnalysisSummary);
+                codeAnalysisSummary,
+                preAnalysis,
+                gitHubSkillMatch);
             evaluation.ResumeId = resume.Id;
             evaluation.JobDescriptionId = jobDescriptionId;
+
+            // Recheck for duplicates before saving (guards against concurrent calls)
+            var freshEvals = await _storage.LoadListAsync<CandidateEvaluation>(EvaluationsCollection);
+            var duplicate = freshEvals.Find(e => e.ResumeId == resume.Id && e.JobDescriptionId == jobDescriptionId);
+            if (duplicate != null)
+            {
+                results.Add(duplicate);
+                continue;
+            }
+
             await _storage.AppendToListAsync(EvaluationsCollection, evaluation);
             results.Add(evaluation);
         }

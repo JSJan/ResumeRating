@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using ResumeRating.Api.Models;
 using ResumeRating.Api.Services;
+using System.Text.Json;
 
 namespace ResumeRating.Api.Controllers;
 
@@ -9,10 +10,12 @@ namespace ResumeRating.Api.Controllers;
 public class EvaluationController : ControllerBase
 {
     private readonly IEvaluationService _evaluationService;
+    private readonly IAiService _aiService;
 
-    public EvaluationController(IEvaluationService evaluationService)
+    public EvaluationController(IEvaluationService evaluationService, IAiService aiService)
     {
         _evaluationService = evaluationService;
+        _aiService = aiService;
     }
 
     [HttpPost("evaluate")]
@@ -32,11 +35,102 @@ public class EvaluationController : ControllerBase
         }
     }
 
+    private static readonly JsonSerializerOptions CamelCaseOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    [HttpPost("evaluate-stream")]
+    public async Task EvaluateWithProgress([FromBody] EvaluateRequest request)
+    {
+        Response.ContentType = "text/event-stream";
+        Response.Headers.CacheControl = "no-cache";
+        Response.Headers.Connection = "keep-alive";
+
+        async Task SendEvent(string step, string message, int progress)
+        {
+            var data = JsonSerializer.Serialize(new { step, message, progress }, CamelCaseOptions);
+            await Response.WriteAsync($"data: {data}\n\n");
+            await Response.Body.FlushAsync();
+        }
+
+        try
+        {
+            await SendEvent("start", "Starting evaluation...", 0);
+
+            // Load resume and JD
+            await SendEvent("loading", "Loading resume and job description...", 10);
+            var resumes = await _evaluationService.GetResumesAsync();
+            var resume = resumes.Find(r => r.Id == request.ResumeId);
+            if (resume == null) { await SendEvent("error", "Resume not found.", 0); return; }
+
+            var jds = await _evaluationService.GetJobDescriptionsAsync();
+            var jd = jds.Find(j => j.Id == request.JobDescriptionId);
+            if (jd == null) { await SendEvent("error", "Job description not found.", 0); return; }
+
+            // LinkedIn check
+            if (!string.IsNullOrWhiteSpace(resume.LinkedInUrl))
+            {
+                await SendEvent("linkedin", $"Checking LinkedIn profile: {resume.LinkedInUrl}", 20);
+                await Task.Delay(500); // brief pause for UX
+            }
+            else
+            {
+                await SendEvent("linkedin", "No LinkedIn profile provided — skipping.", 20);
+            }
+
+            // GitHub check
+            if (!string.IsNullOrWhiteSpace(resume.GitHubUsername))
+            {
+                await SendEvent("github_profile", $"Fetching GitHub profile for {resume.GitHubUsername}...", 30);
+                await Task.Delay(300);
+                await SendEvent("github_code", $"Analyzing source code from {resume.GitHubUsername}'s repositories...", 45);
+                await Task.Delay(300);
+            }
+            else
+            {
+                await SendEvent("github_profile", "No GitHub username provided — skipping code analysis.", 45);
+            }
+
+            // AI Evaluation
+            await SendEvent("ai_eval", "Running AI evaluation against job description...", 55);
+            await SendEvent("ai_eval", "Checking resume authenticity & buzzword analysis...", 65);
+            await SendEvent("ai_eval", "Analyzing code proficiency & generating scores...", 75);
+
+            var evaluation = await _evaluationService.EvaluateAsync(request.ResumeId, request.JobDescriptionId);
+
+            await SendEvent("complete", "Evaluation complete!", 100);
+
+            // Send the final result
+            var resultData = JsonSerializer.Serialize(new { step = "result", evaluation, progress = 100 }, CamelCaseOptions);
+            await Response.WriteAsync($"data: {resultData}\n\n");
+            await Response.Body.FlushAsync();
+        }
+        catch (Exception ex)
+        {
+            await SendEvent("error", ex.Message, 0);
+        }
+    }
+
     [HttpGet("{jobDescriptionId}")]
     public async Task<IActionResult> GetEvaluations(string jobDescriptionId)
     {
         var evaluations = await _evaluationService.GetEvaluationsAsync(jobDescriptionId);
         return Ok(evaluations);
+    }
+
+    [HttpDelete("{evaluationId}")]
+    public async Task<IActionResult> DeleteEvaluation(string evaluationId)
+    {
+        try
+        {
+            await _evaluationService.DeleteEvaluationAsync(evaluationId);
+            return Ok(new { message = "Evaluation deleted." });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
     }
 
     [HttpPost("questionnaire/{evaluationId}")]
@@ -138,6 +232,18 @@ public class EvaluationController : ControllerBase
         {
             return NotFound(ex.Message);
         }
+    }
+
+    [HttpGet("token-usage")]
+    public IActionResult GetTokenUsageSummary()
+    {
+        return Ok(_aiService.GetTokenUsageSummary());
+    }
+
+    [HttpGet("token-usage/log")]
+    public IActionResult GetTokenUsageLog()
+    {
+        return Ok(_aiService.GetTokenUsageLog());
     }
 
     public class EvaluateRequest

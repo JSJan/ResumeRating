@@ -37,6 +37,10 @@ export interface CandidateEvaluation {
   uniquenessFactor: number;
   gitHubScore: number;
   onlinePresenceScore: number;
+  codeProficiencyScore: number;
+  resumeAuthenticityScore: number;
+  buzzwordScore: number;
+  aiGeneratedScore: number;
   overallScore: number;
   experienceFeedback: string;
   workHistoryFeedback: string;
@@ -47,7 +51,14 @@ export interface CandidateEvaluation {
   uniquenessFeedback: string;
   gitHubFeedback: string;
   onlinePresenceFeedback: string;
+  codeProficiencyFeedback: string;
+  resumeAuthenticityFeedback: string;
+  buzzwordFeedback: string;
+  aiGeneratedFeedback: string;
   overallFeedback: string;
+  tailoringRedFlags: string[];
+  buzzwordsDetected: string[];
+  authenticityAnalysis: string;
   standout: string;
   estimatedCurrentPackage: string;
   estimatedCurrentRole: string;
@@ -102,11 +113,16 @@ export const uploadResume = (file: File, linkedInUrl?: string, gitHubUsername?: 
 
 export const getResumes = () => api.get<Resume[]>('/resume');
 
+export const deleteResume = (resumeId: string) => api.delete(`/resume/${resumeId}`);
+
 // Job Description APIs
 export const createJobDescription = (jd: Omit<JobDescription, 'id'>) =>
   api.post<JobDescription>('/jobdescription', jd);
 
 export const getJobDescriptions = () => api.get<JobDescription[]>('/jobdescription');
+
+export const deleteJobDescription = (jobDescriptionId: string) =>
+  api.delete(`/jobdescription/${jobDescriptionId}`);
 
 // Evaluation APIs
 export const evaluateResume = (resumeId: string, jobDescriptionId: string) =>
@@ -114,6 +130,71 @@ export const evaluateResume = (resumeId: string, jobDescriptionId: string) =>
 
 export const getEvaluations = (jobDescriptionId: string) =>
   api.get<CandidateEvaluation[]>(`/evaluation/${jobDescriptionId}`);
+
+export const deleteEvaluation = (evaluationId: string) =>
+  api.delete(`/evaluation/${evaluationId}`);
+
+// SSE streaming evaluate
+export interface EvalProgress {
+  step: string;
+  message?: string;
+  progress?: number;
+  evaluation?: CandidateEvaluation;
+}
+
+export const evaluateResumeStream = (
+  resumeId: string,
+  jobDescriptionId: string,
+  onProgress: (evt: EvalProgress) => void,
+): Promise<CandidateEvaluation | null> => {
+  return new Promise((resolve, reject) => {
+    fetch('http://localhost:5073/api/evaluation/evaluate-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resumeId, jobDescriptionId }),
+    })
+      .then(response => {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        if (!reader) { reject(new Error('No reader')); return; }
+
+        let buffer = '';
+        let resolved = false;
+        const processBuffer = () => {
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6)) as EvalProgress;
+                onProgress(data);
+                if (data.step === 'result' && data.evaluation) {
+                  resolved = true;
+                  resolve(data.evaluation);
+                }
+              } catch { /* ignore parse errors */ }
+            }
+          }
+        };
+        const read = (): Promise<void> => reader.read().then(({ done, value }) => {
+          if (done) {
+            // Process any remaining data in the buffer
+            if (buffer.trim()) {
+              buffer += '\n\n';
+              processBuffer();
+            }
+            if (!resolved) resolve(null);
+            return;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          processBuffer();
+          return read();
+        });
+        read().catch(reject);
+      })
+      .catch(reject);
+  });
+};
 
 export const generateQuestionnaire = (evaluationId: string) =>
   api.post<Questionnaire>(`/evaluation/questionnaire/${evaluationId}`);

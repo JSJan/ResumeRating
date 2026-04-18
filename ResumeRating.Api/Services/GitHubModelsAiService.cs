@@ -1,5 +1,7 @@
 using OpenAI;
 using OpenAI.Chat;
+using Anthropic.SDK;
+using Anthropic.SDK.Messaging;
 using ResumeRating.Api.Models;
 using Newtonsoft.Json;
 using System.ClientModel;
@@ -8,8 +10,24 @@ namespace ResumeRating.Api.Services;
 
 public class GitHubModelsAiService : IAiService
 {
-    private readonly ChatClient _chatClient;
+    private readonly ChatClient _evalClient;
+    private readonly ChatClient _lightClient;
+    private readonly AnthropicClient? _anthropicClient;
+    private readonly string? _anthropicLightModel;
+    private readonly bool _useAnthropicForLight;
     private readonly int _timeoutSeconds;
+    private readonly string _evalModel;
+    private readonly string _lightModel;
+    private readonly List<TokenUsageEntry> _usageLog = [];
+    private readonly object _logLock = new();
+
+    // Pricing per 1M tokens
+    private static readonly Dictionary<string, (double Input, double Output)> ModelPricing = new()
+    {
+        ["gpt-4o"] = (2.50, 10.00),
+        ["gpt-4o-mini"] = (0.15, 0.60),
+        ["claude-3-5-haiku-20241022"] = (0.25, 1.25),
+    };
 
     public GitHubModelsAiService(IConfiguration configuration)
     {
@@ -17,31 +35,75 @@ public class GitHubModelsAiService : IAiService
         var token = configuration["GitHub:Token"]
             ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
             ?? throw new InvalidOperationException("GitHub:Token is not configured. Set it in appsettings.json, user-secrets, or GITHUB_TOKEN env var.");
-        var model = configuration["GitHub:Model"] ?? "gpt-4o";
+        _evalModel = configuration["GitHub:Model"] ?? "gpt-4o";
+        _lightModel = configuration["GitHub:LightModel"] ?? "gpt-4o-mini";
 
         var credential = new ApiKeyCredential(token);
         var options = new OpenAIClientOptions { Endpoint = new Uri("https://models.inference.ai.azure.com") };
         var client = new OpenAIClient(credential, options);
-        _chatClient = client.GetChatClient(model);
+        _evalClient = client.GetChatClient(_evalModel);
+        _lightClient = client.GetChatClient(_lightModel);
+
+        // Optional Anthropic Haiku for light calls
+        var anthropicKey = configuration["Anthropic:ApiKey"];
+        _anthropicLightModel = configuration["Anthropic:LightModel"];
+        if (!string.IsNullOrEmpty(anthropicKey) && !string.IsNullOrEmpty(_anthropicLightModel))
+        {
+            _anthropicClient = new AnthropicClient(new APIAuthentication(anthropicKey));
+            _useAnthropicForLight = true;
+        }
     }
 
-    public async Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription, string? linkedInUrl = null, string? gitHubSummary = null, string? codeAnalysis = null)
+    public async Task<CandidateEvaluation> EvaluateResumeAsync(string resumeText, JobDescription jobDescription, string? linkedInUrl = null, string? gitHubSummary = null, string? codeAnalysis = null, ResumeAnalysis? preAnalysis = null, GitHubSkillMatch? gitHubSkillMatch = null)
     {
-        var linkedInSection = !string.IsNullOrWhiteSpace(linkedInUrl)
-            ? $"\n## LinkedIn Profile (for authenticity cross-reference only — do NOT heavily weight this)\n**URL:** {linkedInUrl}\n(Use ONLY to verify resume authenticity: does the career timeline match? Are claimed roles consistent? Do NOT score LinkedIn profile quality, completeness, or endorsements as a major factor.)\n"
-            : "\n## LinkedIn Profile\nNot provided — this should NOT negatively impact scoring.\n";
+        // Truncate resume text to ~8000 chars (~2000 tokens) to reduce cost
+        var truncatedResume = resumeText.Length > 8000
+            ? resumeText[..8000] + "\n... [resume truncated for brevity]"
+            : resumeText;
 
-        var gitHubSection = !string.IsNullOrWhiteSpace(gitHubSummary)
-            ? $"\n## GitHub Profile & Contributions (BONUS — use to increase rating if impressive)\n{gitHubSummary}\n"
-            : "\n## GitHub Profile\nNot provided — this should NOT negatively impact scoring.\n";
+        // Build conditional sections — only include if data exists
+        var optionalSections = new System.Text.StringBuilder();
 
-        var codeAnalysisSection = !string.IsNullOrWhiteSpace(codeAnalysis)
-            ? $"\n## Actual Source Code from Candidate's GitHub Repos\nBelow is real source code fetched from the candidate's public repositories. Analyze this to assess code quality, design patterns, naming conventions, architecture decisions, error handling, innovation, and actual proficiency level.\n\n{codeAnalysis}\n"
-            : "\n## Source Code Analysis\nNo GitHub code available for analysis.\n";
+        if (!string.IsNullOrWhiteSpace(linkedInUrl))
+            optionalSections.AppendLine($"\n## LinkedIn (authenticity cross-reference only)\n**URL:** {linkedInUrl}\nUse ONLY to verify career timeline consistency. Do NOT weight profile quality.");
+
+        if (!string.IsNullOrWhiteSpace(gitHubSummary))
+            optionalSections.AppendLine($"\n## GitHub Profile (BONUS — increase scores if impressive)\n{gitHubSummary}");
+
+        if (!string.IsNullOrWhiteSpace(codeAnalysis))
+            optionalSections.AppendLine($"\n## Source Code from GitHub Repos\nAnalyze for code quality, patterns, naming, error handling, innovation, and true proficiency.\n\n{codeAnalysis}");
+
+        // Build pre-computed hints section from local analysis
+        var hintsSection = "";
+        if (preAnalysis != null)
+        {
+            var hints = new System.Text.StringBuilder();
+            hints.AppendLine("\n## Pre-Computed Analysis (verified data — use as scoring hints)");
+            hints.AppendLine($"- **Skill match:** {preAnalysis.KeywordMatchPercent:F0}% of JD skills found in resume");
+            hints.AppendLine($"- **Matched skills:** {string.Join(", ", preAnalysis.MatchedSkills)}");
+            hints.AppendLine($"- **Missing skills:** {string.Join(", ", preAnalysis.MissingSkills)}");
+            hints.AppendLine($"- **Est. years of experience:** {preAnalysis.EstimatedYearsOfExperience}");
+            hints.AppendLine($"- **Education level:** {preAnalysis.EducationLevel}");
+            hints.AppendLine($"- **Readability score:** {preAnalysis.ReadabilityScore:F1} (Flesch-Kincaid; low = complex, high = simple)");
+            hints.AppendLine($"- **Sentence length variance:** {preAnalysis.SentenceLengthVariance:F1} (low variance may indicate AI-generated text)");
+            hints.AppendLine($"- **AI-generated probability:** {preAnalysis.AiGeneratedProbability:P0}");
+            if (preAnalysis.PowerVerbsFound.Count > 0)
+                hints.AppendLine($"- **Power verbs found:** {string.Join(", ", preAnalysis.PowerVerbsFound)}");
+            if (preAnalysis.BuzzwordCounts.Count > 0)
+                hints.AppendLine($"- **Repeated JD keywords (3+):** {string.Join(", ", preAnalysis.BuzzwordCounts.Select(kv => $"{kv.Key} ({kv.Value}×)"))}");
+
+            if (gitHubSkillMatch != null)
+            {
+                hints.AppendLine($"- **GitHub skill overlap:** {gitHubSkillMatch.OverlapPercent:F0}%");
+                if (gitHubSkillMatch.MatchedLanguages.Count > 0)
+                    hints.AppendLine($"- **GitHub matched languages:** {string.Join(", ", gitHubSkillMatch.MatchedLanguages)}");
+            }
+
+            hintsSection = hints.ToString();
+        }
 
         var prompt = $$"""
-            You are an expert technical recruiter, hiring manager, and senior code reviewer. Evaluate the following resume against the provided job description.
-            Also consider the candidate's online presence (LinkedIn profile and GitHub contributions) as part of the evaluation.
+            You are an expert technical recruiter, hiring manager, and senior code reviewer. Evaluate the resume against the job description.
 
             ## Job Description
             **Title:** {{jobDescription.Title}}
@@ -51,108 +113,28 @@ public class GitHubModelsAiService : IAiService
             **Experience Level:** {{jobDescription.ExperienceLevel}}
 
             ## Resume
-            {{resumeText}}
-            {{linkedInSection}}
-            {{gitHubSection}}
-            {{codeAnalysisSection}}
+            {{truncatedResume}}
+            {{optionalSections}}
+            {{hintsSection}}
 
-            ## CRITICAL: Resume Authenticity & Tailoring Detection
-            Resumes are commonly tailored or "gamed" to match job descriptions using AI tools, keyword stuffing, or ATS optimization. Perform a thorough authenticity analysis:
+            ## Resume Quality Assessment
+            Assess authenticity, buzzword stuffing, and AI-generated content in a single analysis:
+            - Check keyword density, specificity vs. vagueness, consistency with GitHub code, temporal plausibility
+            - Detect buzzword repetition (3+ times without different context), copy-paste from JD, AI writing patterns (uniform sentence structure, power verb overuse, generic phrasing)
+            - Positive signals: specific project names, exact metrics, named tools, personal voice
 
-            1. **Keyword density analysis**: Are JD keywords repeated unnaturally? Do buzzwords appear without supporting context or examples?
-            2. **Specificity vs. vagueness**: Does the resume contain specific, verifiable achievements (metrics, project names, tech stack details) or generic/vague claims?
-            3. **Consistency check**: Do claimed skills match the depth of experience described? Does a "5-year React developer" show commensurate project complexity?
-            4. **Cross-reference with GitHub**: If code is available, does the candidate's actual coding proficiency match resume claims? Are claimed technologies actually used in their repos?
-            5. **Temporal plausibility**: Are the number of technologies, roles, and achievements plausible for the timeline presented?
-            6. **AI-generated resume signals**: Look for overly polished, generic phrasing typical of AI-generated resumes ("leveraged", "spearheaded", "drove", "orchestrated" without specifics).
+            ## Scoring Rules
+            - **LinkedIn**: LOW weight, authenticity cross-reference only. Default 5/10 if not provided.
+            - **GitHub**: BONUS only. Boost scores if strong code exists. Default 5/10 if not provided.
+            - **Resume + JD fit**: PRIMARY criteria. Low authenticity/buzzword/AI scores should REDUCE overallScore.
 
-            ## CRITICAL: Buzzword Stuffing & AI-Overuse Detection
-            Many candidates inflate their resumes using buzzwords to game ATS systems or fool recruiters. Detect and penalize:
+            Rate 1-10 per category. Respond with ONLY this JSON:
+            {"candidateName":"","experienceScore":0,"experienceFeedback":"","workHistoryScore":0,"workHistoryFeedback":"","educationScore":0,"educationFeedback":"","sideProjectsScore":0,"sideProjectsFeedback":"","jobFitScore":0,"jobFitFeedback":"","awwFactorScore":0,"awwFactorFeedback":"","uniquenessFactor":0,"uniquenessFeedback":"","gitHubScore":0,"gitHubFeedback":"","onlinePresenceScore":0,"onlinePresenceFeedback":"","codeProficiencyScore":0,"codeProficiencyFeedback":"","resumeAuthenticityScore":0,"resumeAuthenticityFeedback":"","buzzwordScore":0,"buzzwordFeedback":"","aiGeneratedScore":0,"aiGeneratedFeedback":"","tailoringRedFlags":[],"buzzwordsDetected":[],"authenticityAnalysis":"","overallScore":0,"overallFeedback":"","standout":"","estimatedCurrentPackage":"","estimatedCurrentRole":"","expectedSalaryRange":"","recommendedForL1":false}
 
-            1. **Buzzword repetition**: Count how many times JD-matching keywords are repeated. Flag any keyword that appears 3+ times without different context each time.
-            2. **Buzzword-to-substance ratio**: If the resume has 20 buzzwords but only 2 concrete examples, that's a red flag. Each claimed skill should have at least one supporting experience.
-            3. **Copy-paste from JD**: Are phrases lifted directly from the job description? Compare sentence structure and phrasing patterns.
-            4. **AI-generated content detection**: Look for these AI writing telltale signs:
-               - Uniform sentence length and structure
-               - Excessive use of power verbs without measurable outcomes ("spearheaded", "orchestrated", "championed", "pioneered")
-               - Perfect grammar with no personal voice or style
-               - Generic descriptions that could apply to any candidate ("results-driven professional", "passionate about technology")
-               - Suspiciously comprehensive skill lists that cover every JD requirement perfectly
-            5. **Plagiarism signals**: Does the resume read like a job description template? Are role descriptions suspiciously similar to standard LinkedIn job postings or JD templates?
-            6. **Authenticity indicators (POSITIVE)**: Specific project names, exact metrics ("reduced latency by 32ms"), named tools/internal systems, unique experiences, personal voice, imperfect but honest phrasing.
-
-            ## CRITICAL: Deep Code Proficiency Assessment
-            If source code from GitHub repos is provided, perform a thorough code review:
-            1. **Code quality**: Naming conventions, readability, structure, modularity
-            2. **Design patterns**: Are established patterns used appropriately?
-            3. **Error handling**: Is error handling present and sensible?
-            4. **Innovation**: Any creative or novel approaches?
-            5. **Relevance**: How relevant is the code to the job description skills?
-            6. **Proficiency level**: Based on actual code, what is the true proficiency level (junior/mid/senior/staff)?
-
-            ## SCORING WEIGHTAGE RULES
-            - **LinkedIn**: LOW weight. Use ONLY for authenticity cross-referencing (verifying resume claims, career timeline consistency). Do NOT heavily score LinkedIn profile quality, endorsements, or activity. Score onlinePresenceScore as 5/10 baseline.
-            - **GitHub (if available)**: BONUS only. Good GitHub repos/code should INCREASE the candidate's scores (especially sideProjects, codeProficiency, and overall). Absence of GitHub should NOT decrease any score — default to neutral (5/10).
-            - **Resume + JD fit**: PRIMARY scoring criteria. Focus on experience, work history, education, skills match, and authenticity.
-
-            ## Instructions
-            Rate each category from 1-10 and provide detailed feedback.
-
-            Respond in this exact JSON format:
-            {
-                "candidateName": "<extract from resume>",
-                "experienceScore": <1-10>,
-                "experienceFeedback": "<detailed feedback>",
-                "workHistoryScore": <1-10>,
-                "workHistoryFeedback": "<detailed feedback>",
-                "educationScore": <1-10>,
-                "educationFeedback": "<detailed feedback>",
-                "sideProjectsScore": <1-10>,
-                "sideProjectsFeedback": "<detailed feedback including GitHub projects analysis>",
-                "jobFitScore": <1-10>,
-                "jobFitFeedback": "<detailed feedback>",
-                "awwFactorScore": <1-10>,
-                "awwFactorFeedback": "<what makes this candidate impressive>",
-                "uniquenessFactor": <1-10>,
-                "uniquenessFeedback": "<what sets them apart from typical candidates>",
-                "gitHubScore": <1-10>,
-                "gitHubFeedback": "<assessment of GitHub contributions: repo quality, languages, activity, open-source involvement, code samples from READMEs>",
-                "onlinePresenceScore": <1-10>,
-                "onlinePresenceFeedback": "<assessment of LinkedIn profile, professional branding, consistency between resume and online profiles>",
-                "codeProficiencyScore": <1-10>,
-                "codeProficiencyFeedback": "<deep analysis of actual source code: quality, patterns, architecture, naming, error handling, innovation, true skill level vs resume claims>",
-                "resumeAuthenticityScore": <1-10>,
-                "resumeAuthenticityFeedback": "<honest assessment: 10=clearly authentic with verifiable specifics, 1=heavily gamed/keyword-stuffed>",
-                "buzzwordScore": <1-10>,
-                "buzzwordFeedback": "<10=no buzzword abuse, natural language; 1=heavily stuffed with repeated keywords. List specific buzzwords found with counts>",
-                "aiGeneratedScore": <1-10>,
-                "aiGeneratedFeedback": "<10=clearly human-written with personal voice; 1=almost certainly AI-generated. Cite specific patterns detected: uniform sentence structure, power verb overuse, generic phrasing, perfect coverage of JD>",
-                "tailoringRedFlags": ["<red flag 1>", "<red flag 2>"],
-                "buzzwordsDetected": ["<buzzword1 (count)>", "<buzzword2 (count)>"],
-                "authenticityAnalysis": "<detailed paragraph: keyword density issues, vague vs specific claims, consistency gaps between resume and code, temporal plausibility concerns, AI-generated content signals, plagiarism indicators>",
-                "overallScore": <1-10>,
-                "overallFeedback": "<comprehensive summary including authenticity and code proficiency assessment>",
-                "standout": "<key differentiators that set this candidate apart>",
-                "estimatedCurrentPackage": "<estimate based on experience and skills>",
-                "estimatedCurrentRole": "<likely current role/title>",
-                "expectedSalaryRange": "<expected salary range for this job>",
-                "recommendedForL1": <true/false>
-            }
-
-            IMPORTANT:
-            - The resumeAuthenticityScore should significantly penalize resumes that appear heavily tailored/gamed. A resume with specific, verifiable achievements and consistent GitHub evidence should score high. A resume full of buzzwords with no substance should score low.
-            - The buzzwordScore should penalize keyword stuffing. Count each JD-matching buzzword and flag repeats. A candidate who mentions "microservices" 6 times without 6 different microservices contexts is stuffing.
-            - The aiGeneratedScore should detect AI-written resumes. Look for uniform structure, power verbs without metrics, generic phrasing, and suspiciously perfect JD coverage. A human-written resume has personality, imperfections, and specific details.
-            - These three scores (authenticity, buzzword, AI) should REDUCE the overallScore if they are low. A beautifully written but fake resume should score LOWER overall than an imperfect but genuine one.
-            SCORING DEFAULTS when data is not provided:
-            - LinkedIn not provided: onlinePresenceScore = 5/10, feedback: "Not provided — neutral, does not impact scoring."
-            - GitHub not provided: gitHubScore = 5/10, codeProficiencyScore = 5/10, feedback: "Not provided — neutral, does not impact scoring."
-            - GitHub IS provided with strong code: BOOST gitHubScore, codeProficiencyScore, sideProjectsScore, and overallScore upward. GitHub evidence is a hands-on proof point that should elevate the candidate.
-            - LinkedIn IS provided: Use ONLY for authenticity verification. If LinkedIn contradicts resume claims, flag it in resumeAuthenticityFeedback.
-            Be thorough, honest, and constructive. Respond ONLY with the JSON object, no additional text.
+            Fill every field with detailed content. Be thorough, honest, and constructive.
             """;
 
-        var response = await CallAsync(prompt);
+        var response = await CallAsync(prompt, "evaluate-resume");
         var evaluation = JsonConvert.DeserializeObject<CandidateEvaluation>(response)
             ?? throw new InvalidOperationException("Failed to parse evaluation response.");
 
@@ -204,7 +186,7 @@ public class GitHubModelsAiService : IAiService
             Respond ONLY with the JSON object.
             """;
 
-        var response = await CallAsync(prompt);
+        var response = await CallLightAsync(prompt, "generate-l1-questionnaire");
         var parsed = JsonConvert.DeserializeObject<QuestionnaireResponse>(response)
             ?? throw new InvalidOperationException("Failed to parse questionnaire response.");
 
@@ -265,7 +247,7 @@ public class GitHubModelsAiService : IAiService
             Be thorough and constructive. Respond ONLY with the JSON object.
             """;
 
-        var response = await CallAsync(prompt);
+        var response = await CallLightAsync(prompt, "evaluate-l1-answers");
         var parsed = JsonConvert.DeserializeObject<L1Feedback>(response)
             ?? throw new InvalidOperationException("Failed to parse L1 feedback response.");
 
@@ -339,7 +321,7 @@ public class GitHubModelsAiService : IAiService
             Make challenges specific to the candidate's experience and the job requirements. Respond ONLY with the JSON object.
             """;
 
-        var response = await CallAsync(prompt);
+        var response = await CallLightAsync(prompt, "generate-l2-questionnaire");
         var parsed = JsonConvert.DeserializeObject<L2QuestionnaireResponse>(response)
             ?? throw new InvalidOperationException("Failed to parse L2 questionnaire response.");
 
@@ -429,7 +411,7 @@ public class GitHubModelsAiService : IAiService
             Be thorough and constructive. Respond ONLY with the JSON object.
             """;
 
-        var response = await CallAsync(prompt);
+        var response = await CallLightAsync(prompt, "evaluate-l2-answers");
         var parsed = JsonConvert.DeserializeObject<L2AssessmentResponse>(response)
             ?? throw new InvalidOperationException("Failed to parse L2 assessment response.");
 
@@ -483,7 +465,60 @@ public class GitHubModelsAiService : IAiService
         };
     }
 
-    private async Task<string> CallAsync(string prompt)
+    private Task<string> CallAsync(string prompt, string operation = "unknown") => CallWithClientAsync(_evalClient, _evalModel, prompt, operation);
+
+    private Task<string> CallLightAsync(string prompt, string operation = "unknown")
+    {
+        if (_useAnthropicForLight)
+            return CallAnthropicAsync(prompt, operation);
+        return CallWithClientAsync(_lightClient, _lightModel, prompt, operation);
+    }
+
+    private async Task<string> CallAnthropicAsync(string prompt, string operation)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var parameters = new MessageParameters
+        {
+            Model = _anthropicLightModel!,
+            MaxTokens = 4096,
+            System = [new SystemMessage("You are a precise JSON-outputting assistant. Always respond with valid JSON only.")],
+            Messages = [new Message(RoleType.User, prompt)]
+        };
+
+        var response = await _anthropicClient!.Messages.GetClaudeMessageAsync(parameters);
+        sw.Stop();
+
+        var inputTokens = response.Usage?.InputTokens ?? 0;
+        var outputTokens = response.Usage?.OutputTokens ?? 0;
+        var (inputPrice, outputPrice) = ModelPricing.GetValueOrDefault(_anthropicLightModel!, (0.25, 1.25));
+        var cost = (inputTokens * inputPrice / 1_000_000) + (outputTokens * outputPrice / 1_000_000);
+
+        var entry = new TokenUsageEntry
+        {
+            Operation = operation,
+            Model = _anthropicLightModel!,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            EstimatedCost = Math.Round(cost, 6),
+            DurationMs = sw.Elapsed.TotalMilliseconds,
+        };
+        lock (_logLock) { _usageLog.Add(entry); }
+
+        var content = response.Content.OfType<TextContent>().FirstOrDefault()?.Text
+            ?? throw new InvalidOperationException("No text content in Anthropic response.");
+
+        if (content.StartsWith("```"))
+        {
+            var firstNewline = content.IndexOf('\n');
+            var lastFence = content.LastIndexOf("```");
+            if (firstNewline >= 0 && lastFence > firstNewline)
+                content = content[(firstNewline + 1)..lastFence].Trim();
+        }
+
+        return content;
+    }
+
+    private async Task<string> CallWithClientAsync(ChatClient client, string model, string prompt, string operation)
     {
         var messages = new List<ChatMessage>
         {
@@ -491,8 +526,29 @@ public class GitHubModelsAiService : IAiService
             new UserChatMessage(prompt)
         };
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
-        var completion = await _chatClient.CompleteChatAsync(messages, cancellationToken: cts.Token);
+        var completion = await client.CompleteChatAsync(messages, cancellationToken: cts.Token);
+        sw.Stop();
+
+        var usage = completion.Value.Usage;
+        var inputTokens = usage?.InputTokenCount ?? 0;
+        var outputTokens = usage?.OutputTokenCount ?? 0;
+
+        var (inputPrice, outputPrice) = ModelPricing.GetValueOrDefault(model, (2.50, 10.00));
+        var cost = (inputTokens * inputPrice / 1_000_000) + (outputTokens * outputPrice / 1_000_000);
+
+        var entry = new TokenUsageEntry
+        {
+            Operation = operation,
+            Model = model,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            EstimatedCost = Math.Round(cost, 6),
+            DurationMs = sw.Elapsed.TotalMilliseconds,
+        };
+        lock (_logLock) { _usageLog.Add(entry); }
+
         var content = completion.Value.Content[0].Text;
 
         // Strip markdown code fences if present
@@ -507,6 +563,44 @@ public class GitHubModelsAiService : IAiService
         }
 
         return content;
+    }
+
+    public List<TokenUsageEntry> GetTokenUsageLog()
+    {
+        lock (_logLock) { return [.. _usageLog]; }
+    }
+
+    public TokenUsageSummary GetTokenUsageSummary()
+    {
+        List<TokenUsageEntry> snapshot;
+        lock (_logLock) { snapshot = [.. _usageLog]; }
+
+        var byOp = snapshot
+            .GroupBy(e => (e.Operation, e.Model))
+            .Select(g => new TokenUsageByOperation
+            {
+                Operation = g.Key.Operation,
+                Model = g.Key.Model,
+                CallCount = g.Count(),
+                TotalInputTokens = g.Sum(e => e.InputTokens),
+                TotalOutputTokens = g.Sum(e => e.OutputTokens),
+                TotalEstimatedCost = Math.Round(g.Sum(e => e.EstimatedCost), 6),
+                AvgDurationMs = Math.Round(g.Average(e => e.DurationMs), 0),
+            })
+            .OrderByDescending(o => o.TotalEstimatedCost)
+            .ToList();
+
+        return new TokenUsageSummary
+        {
+            TotalCalls = snapshot.Count,
+            TotalInputTokens = snapshot.Sum(e => e.InputTokens),
+            TotalOutputTokens = snapshot.Sum(e => e.OutputTokens),
+            TotalTokens = snapshot.Sum(e => e.TotalTokens),
+            TotalEstimatedCost = Math.Round(snapshot.Sum(e => e.EstimatedCost), 6),
+            AvgDurationMs = snapshot.Count > 0 ? Math.Round(snapshot.Average(e => e.DurationMs), 0) : 0,
+            ByOperation = byOp,
+            RecentCalls = snapshot.OrderByDescending(e => e.Timestamp).Take(20).ToList(),
+        };
     }
 
     private class QuestionnaireResponse

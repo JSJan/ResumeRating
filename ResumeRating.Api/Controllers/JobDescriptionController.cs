@@ -31,4 +31,18 @@ public class JobDescriptionController : ControllerBase
         var jds = await _evaluationService.GetJobDescriptionsAsync();
         return Ok(jds);
     }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
+    {
+        try
+        {
+            await _evaluationService.DeleteJobDescriptionAsync(id);
+            return NoContent();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
 }

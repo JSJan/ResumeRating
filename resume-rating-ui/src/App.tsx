@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
+import axios from 'axios';
 import {
   Resume, JobDescription, CandidateEvaluation, Questionnaire, L1Feedback,
-  L2Questionnaire, L2Assessment,
-  uploadResume, getResumes, createJobDescription, getJobDescriptions,
-  evaluateResume, getEvaluations, generateQuestionnaire, submitL1Answers,
-  seedFromAssets, evaluateAll, generateL2Questionnaire, submitL2Answers
+  L2Questionnaire, L2Assessment, EvalProgress,
+  uploadResume, getResumes, deleteResume, createJobDescription, getJobDescriptions, deleteJobDescription,
+  evaluateResume, getEvaluations, deleteEvaluation, generateQuestionnaire, submitL1Answers,
+  seedFromAssets, evaluateAll, generateL2Questionnaire, submitL2Answers, evaluateResumeStream
 } from './api';
 
 type Tab = 'upload' | 'jobDescription' | 'evaluate' | 'comparison' | 'questionnaire' | 'l1feedback' | 'l2round' | 'l2feedback';
@@ -46,9 +47,33 @@ const App: React.FC = () => {
   const [l2Assessment, setL2Assessment] = useState<L2Assessment | null>(null);
   const [l2Answers, setL2Answers] = useState({ systemDesign: '', handsOnCoding: '', designThinking: '', tradeOffAnalysis: '' });
 
+  // Progress state
+  const [progressSteps, setProgressSteps] = useState<EvalProgress[]>([]);
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [showProgress, setShowProgress] = useState(false);
+
   const handleError = (err: unknown) => {
-    if (err instanceof Error) setError(err.message);
-    else setError('An error occurred');
+    if (axios.isAxiosError(err)) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      if (status === 404) {
+        setError(`Resource not found. ${typeof data === 'string' ? data : 'Ensure the resume and job description exist.'} Try refreshing your data.`);
+      } else if (status === 400) {
+        setError(`Invalid request: ${typeof data === 'string' ? data : 'Check your inputs and try again.'}`);
+      } else if (status === 500) {
+        setError('Server error. The AI service may be temporarily unavailable. Check your API token configuration and try again in a moment.');
+      } else if (err.code === 'ECONNABORTED') {
+        setError('Request timed out. AI evaluation can take up to 2 minutes. Try again or check if the backend is running.');
+      } else if (err.code === 'ERR_NETWORK') {
+        setError('Cannot connect to the server. Ensure the backend is running on http://localhost:5073.');
+      } else {
+        setError(err.message || 'An unexpected error occurred. Check the browser console for details.');
+      }
+    } else if (err instanceof Error) {
+      setError(err.message);
+    } else {
+      setError('An unexpected error occurred. Check the browser console for details.');
+    }
   };
 
   const handleUpload = async () => {
@@ -79,20 +104,74 @@ const App: React.FC = () => {
     setLoading(false);
   };
 
-  const handleEvaluate = async () => {
-    if (!selectedResume || !selectedJd) return;
+  const handleDeleteJd = async (jdId: string) => {
+    if (!window.confirm('Delete this job description? This will also remove all evaluations associated with it.')) return;
     setLoading(true);
     setError('');
     try {
-      const res = await evaluateResume(selectedResume, selectedJd);
-      setCurrentEvaluation(res.data);
+      await deleteJobDescription(jdId);
+      const res = await getJobDescriptions();
+      setJobDescs(res.data);
+      // Clear related selections
+      if (selectedJd === jdId) { setSelectedJd(''); setCurrentEvaluation(null); }
+      if (comparisonJd === jdId) { setComparisonJd(''); setComparisonEvals([]); }
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const handleEvaluate = async () => {
+    if (!selectedResume || !selectedJd) return;
+    if (!window.confirm('This will run an AI evaluation which uses API tokens. Continue?')) return;
+    setLoading(true);
+    setError('');
+    setShowProgress(true);
+    setProgressSteps([]);
+    setProgressPercent(0);
+    try {
+      const result = await evaluateResumeStream(selectedResume, selectedJd, (evt) => {
+        if (evt.progress !== undefined) setProgressPercent(evt.progress);
+        if (evt.step !== 'result') {
+          setProgressSteps(prev => [...prev, evt]);
+        }
+      });
+      if (result) {
+        setCurrentEvaluation(result);
+      } else {
+        // Fallback to regular API
+        const res = await evaluateResume(selectedResume, selectedJd);
+        setCurrentEvaluation(res.data);
+      }
       const evals = await getEvaluations(selectedJd);
       setEvaluations(evals.data);
+    } catch (e) { handleError(e); }
+    setLoading(false);
+    setTimeout(() => setShowProgress(false), 2000);
+  };
+
+  const handleDeleteResume = async (resumeId: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      await deleteResume(resumeId);
+      const res = await getResumes();
+      setResumes(res.data);
+    } catch (e) { handleError(e); }
+    setLoading(false);
+  };
+
+  const handleDeleteEvaluation = async (evaluationId: string, jdId: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      await deleteEvaluation(evaluationId);
+      const evals = await getEvaluations(jdId);
+      setComparisonEvals(evals.data);
     } catch (e) { handleError(e); }
     setLoading(false);
   };
 
   const handleGenerateQuestionnaire = async (evalId: string) => {
+    if (!window.confirm('Generate L1 questionnaire using AI? This uses API tokens.')) return;
     setLoading(true);
     setError('');
     try {
@@ -106,6 +185,7 @@ const App: React.FC = () => {
 
   const handleSubmitAnswers = async () => {
     if (!questionnaire || !currentEvaluation) return;
+    if (!window.confirm('Submit answers for AI evaluation? This uses API tokens.')) return;
     setLoading(true);
     setError('');
     try {
@@ -162,6 +242,7 @@ const App: React.FC = () => {
 
   const handleEvaluateAll = async () => {
     if (!comparisonJd) return;
+    if (!window.confirm(`This will evaluate all unevaluated resumes against the selected JD using AI tokens. This may take several minutes. Continue?`)) return;
     setLoading(true);
     setError('');
     try {
@@ -172,6 +253,7 @@ const App: React.FC = () => {
   };
 
   const handleGenerateL2 = async (evalId: string) => {
+    if (!window.confirm('Generate L2 tech round challenges using AI? This uses API tokens.')) return;
     setLoading(true);
     setError('');
     try {
@@ -185,6 +267,7 @@ const App: React.FC = () => {
 
   const handleSubmitL2 = async () => {
     if (!l2Questionnaire || !currentEvaluation) return;
+    if (!window.confirm('Submit L2 answers for AI evaluation? This uses API tokens.')) return;
     setLoading(true);
     setError('');
     try {
@@ -214,10 +297,26 @@ const App: React.FC = () => {
 
   const scoreColor = (s: number) => s >= 7 ? '#22c55e' : s >= 4 ? '#f59e0b' : '#ef4444';
 
+  const dimensionTooltips: Record<string, string> = {
+    'Experience': 'Years and depth of professional experience relative to the job requirements.',
+    'Work History': 'Quality, relevance, and progression of previous roles and companies.',
+    'Education': 'Academic qualifications and certifications relevant to the position.',
+    'Side Projects': 'Personal projects, open-source contributions, and self-directed learning.',
+    'Job Fit': 'How well the candidate\'s overall profile matches the specific job description.',
+    'Aww Factor': 'Impressive achievements, passion indicators, and "wow" moments in the resume.',
+    'Uniqueness': 'What sets this candidate apart from typical applicants for this role.',
+    'GitHub Activity': 'Quality and frequency of GitHub contributions, repositories, and code.',
+    'Online Presence': 'Professional online visibility — LinkedIn, blog, talks, community involvement.',
+    'Code Proficiency': 'Demonstrated coding skill based on GitHub source code analysis.',
+    'Resume Authenticity': 'How genuine the resume content appears (higher = more authentic).',
+    'Buzzword Score': 'Degree of keyword stuffing or JD copy-paste (higher = less buzzword abuse).',
+    'AI-Generated Detection': 'Likelihood the resume was written by AI (higher = more likely human-written).',
+  };
+
   const ScoreBar: React.FC<{ label: string; score: number; feedback: string }> = ({ label, score, feedback }) => (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <strong>{label}</strong>
+        <strong title={dimensionTooltips[label] || ''} style={{ cursor: dimensionTooltips[label] ? 'help' : 'default', borderBottom: dimensionTooltips[label] ? '1px dotted #9ca3af' : 'none' }}>{label}</strong>
         <span style={{ color: score >= 7 ? '#22c55e' : score >= 4 ? '#f59e0b' : '#ef4444', fontWeight: 'bold' }}>
           {score}/10
         </span>
@@ -242,22 +341,25 @@ const App: React.FC = () => {
 
       {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', padding: 12, borderRadius: 8, color: '#dc2626', marginBottom: 16 }}>{error}</div>}
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '2px solid #e5e7eb', flexWrap: 'wrap' }}>
-        {([['upload', 'Upload Resumes'], ['jobDescription', 'Job Description'], ['evaluate', 'Evaluate'], ['comparison', 'Compare All'], ['questionnaire', 'L1 Questionnaire'], ['l1feedback', 'L1 Feedback'], ['l2round', 'L2 Tech Round'], ['l2feedback', 'L2 Result']] as [Tab, string][]).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            style={{
-              padding: '10px 20px', border: 'none', cursor: 'pointer',
-              background: activeTab === key ? '#3b82f6' : 'transparent',
-              color: activeTab === key ? '#fff' : '#6b7280',
-              borderRadius: '8px 8px 0 0', fontWeight: activeTab === key ? 'bold' : 'normal'
-            }}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Tabs — horizontally scrollable on small screens */}
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', marginBottom: 24, borderBottom: '2px solid #e5e7eb', scrollbarWidth: 'thin' }}>
+        <div style={{ display: 'flex', gap: 4, minWidth: 'max-content' }}>
+          {([['upload', '📄 Upload'], ['jobDescription', '📋 Job Desc'], ['evaluate', '🤖 Evaluate'], ['comparison', '📊 Compare'], ['questionnaire', '❓ L1 Questions'], ['l1feedback', '✅ L1 Feedback'], ['l2round', '💻 L2 Round'], ['l2feedback', '🏆 L2 Result']] as [Tab, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              style={{
+                padding: '10px 16px', border: 'none', cursor: 'pointer',
+                background: activeTab === key ? '#3b82f6' : 'transparent',
+                color: activeTab === key ? '#fff' : '#6b7280',
+                borderRadius: '8px 8px 0 0', fontWeight: activeTab === key ? 'bold' : 'normal',
+                whiteSpace: 'nowrap', fontSize: 13, flexShrink: 0
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Upload Tab */}
@@ -290,6 +392,7 @@ const App: React.FC = () => {
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>LinkedIn</th>
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>GitHub</th>
                     <th style={{ padding: 8, textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Uploaded</th>
+                    <th style={{ padding: 8, textAlign: 'center', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -304,6 +407,12 @@ const App: React.FC = () => {
                         {r.gitHubUsername ? <a href={`https://github.com/${r.gitHubUsername}`} target="_blank" rel="noopener noreferrer" style={{ color: '#333' }}>{r.gitHubUsername}</a> : <span style={{ color: '#9ca3af' }}>—</span>}
                       </td>
                       <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb' }}>{new Date(r.uploadedAt).toLocaleDateString()}</td>
+                      <td style={{ padding: 8, borderBottom: '1px solid #e5e7eb', textAlign: 'center' }}>
+                        <button onClick={() => handleDeleteResume(r.id)} disabled={loading}
+                          style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                          Delete
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -338,9 +447,15 @@ const App: React.FC = () => {
             <div style={{ marginTop: 24 }}>
               <h3 style={{ fontSize: 16, marginBottom: 8 }}>Existing Job Descriptions</h3>
               {jobDescs.map(jd => (
-                <div key={jd.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 8 }}>
-                  <strong>{jd.title}</strong>
-                  <p style={{ color: '#6b7280', fontSize: 14 }}>{jd.description.substring(0, 150)}...</p>
+                <div key={jd.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <strong>{jd.title}</strong>
+                    <p style={{ color: '#6b7280', fontSize: 14 }}>{jd.description.substring(0, 150)}...</p>
+                  </div>
+                  <button onClick={() => handleDeleteJd(jd.id)} disabled={loading}
+                    style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12, marginLeft: 12, flexShrink: 0 }}>
+                    Delete
+                  </button>
                 </div>
               ))}
             </div>
@@ -353,21 +468,47 @@ const App: React.FC = () => {
         <div>
           <h2 style={{ fontSize: 20, marginBottom: 16 }}>Evaluate Candidates</h2>
           <div style={{ display: 'grid', gap: 12, marginBottom: 16 }}>
-            <select value={selectedResume} onChange={e => setSelectedResume(e.target.value)}
+            <select value={selectedResume} onChange={e => { setSelectedResume(e.target.value); setCurrentEvaluation(null); }}
               style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8 }}>
               <option value="">Select Resume</option>
               {resumes.map(r => <option key={r.id} value={r.id}>{r.candidateName} - {r.fileName}</option>)}
             </select>
-            <select value={selectedJd} onChange={e => setSelectedJd(e.target.value)}
+            <select value={selectedJd} onChange={e => { setSelectedJd(e.target.value); setCurrentEvaluation(null); }}
               style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8 }}>
               <option value="">Select Job Description</option>
               {jobDescs.map(jd => <option key={jd.id} value={jd.id}>{jd.title}</option>)}
             </select>
             <button onClick={handleEvaluate} disabled={loading || !selectedResume || !selectedJd}
-              style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+              style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', border: 'none', borderRadius: 8, cursor: 'pointer', opacity: loading || !selectedResume || !selectedJd ? 0.5 : 1 }}>
               {loading ? 'Evaluating with AI...' : 'Evaluate Resume'}
             </button>
+            {!selectedJd && <p style={{ color: '#f59e0b', fontSize: 13, marginTop: 4 }}>Please select a Job Description to enable evaluation.</p>}
           </div>
+
+          {/* Progress Panel */}
+          {showProgress && (
+            <div style={{ border: '1px solid #dbeafe', borderRadius: 8, padding: 16, marginBottom: 16, background: '#eff6ff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <strong style={{ color: '#1d4ed8' }}>Evaluation Progress</strong>
+                <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>{progressPercent}%</span>
+              </div>
+              <div style={{ background: '#bfdbfe', borderRadius: 8, height: 8, marginBottom: 12 }}>
+                <div style={{ width: `${progressPercent}%`, background: '#3b82f6', borderRadius: 8, height: 8, transition: 'width 0.3s ease' }} />
+              </div>
+              {progressSteps.map((step, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13, color: '#374151' }}>
+                  <span style={{
+                    width: 20, height: 20, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0,
+                    background: step.step === 'error' ? '#fecaca' : step.step === 'complete' ? '#bbf7d0' : '#dbeafe',
+                    color: step.step === 'error' ? '#dc2626' : step.step === 'complete' ? '#16a34a' : '#2563eb',
+                  }}>
+                    {step.step === 'error' ? '✗' : step.step === 'complete' ? '✓' : '●'}
+                  </span>
+                  {step.message}
+                </div>
+              ))}
+            </div>
+          )}
 
           {currentEvaluation && (
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 20 }}>
@@ -390,6 +531,37 @@ const App: React.FC = () => {
               <ScoreBar label="Uniqueness" score={currentEvaluation.uniquenessFactor} feedback={currentEvaluation.uniquenessFeedback} />
               <ScoreBar label="GitHub Activity" score={currentEvaluation.gitHubScore} feedback={currentEvaluation.gitHubFeedback} />
               <ScoreBar label="Online Presence" score={currentEvaluation.onlinePresenceScore} feedback={currentEvaluation.onlinePresenceFeedback} />
+              <ScoreBar label="Code Proficiency" score={currentEvaluation.codeProficiencyScore} feedback={currentEvaluation.codeProficiencyFeedback} />
+
+              <h4 style={{ marginTop: 20, marginBottom: 8, color: '#374151' }}>Authenticity Analysis</h4>
+              <ScoreBar label="Resume Authenticity" score={currentEvaluation.resumeAuthenticityScore} feedback={currentEvaluation.resumeAuthenticityFeedback} />
+              <ScoreBar label="Buzzword Score" score={currentEvaluation.buzzwordScore} feedback={currentEvaluation.buzzwordFeedback} />
+              <ScoreBar label="AI-Generated Detection" score={currentEvaluation.aiGeneratedScore} feedback={currentEvaluation.aiGeneratedFeedback} />
+
+              {currentEvaluation.tailoringRedFlags && currentEvaluation.tailoringRedFlags.length > 0 && (
+                <div style={{ background: '#fef2f2', borderRadius: 8, padding: 12, marginTop: 8 }}>
+                  <strong style={{ color: '#dc2626' }}>Tailoring Red Flags:</strong>
+                  <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
+                    {currentEvaluation.tailoringRedFlags.map((f, i) => <li key={i} style={{ color: '#991b1b', fontSize: 14 }}>{f}</li>)}
+                  </ul>
+                </div>
+              )}
+              {currentEvaluation.buzzwordsDetected && currentEvaluation.buzzwordsDetected.length > 0 && (
+                <div style={{ background: '#fffbeb', borderRadius: 8, padding: 12, marginTop: 8 }}>
+                  <strong style={{ color: '#b45309' }}>Buzzwords Detected:</strong>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    {currentEvaluation.buzzwordsDetected.map((b, i) => (
+                      <span key={i} style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 12, fontSize: 12 }}>{b}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {currentEvaluation.authenticityAnalysis && (
+                <div style={{ background: '#f9fafb', borderRadius: 8, padding: 12, marginTop: 8 }}>
+                  <strong>Authenticity Analysis:</strong>
+                  <p style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>{currentEvaluation.authenticityAnalysis}</p>
+                </div>
+              )}
 
               <div style={{ background: '#f9fafb', borderRadius: 8, padding: 16, marginTop: 16 }}>
                 <h4>What Sets Them Apart</h4>
@@ -496,6 +668,7 @@ const App: React.FC = () => {
                       ))}
                       <th style={{ padding: 10, textAlign: 'center', borderBottom: '2px solid #e5e7eb' }}>L1?</th>
                       <th style={{ padding: 10, textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>Expected Salary</th>
+                      <th style={{ padding: 10, textAlign: 'center', borderBottom: '2px solid #e5e7eb' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -514,6 +687,12 @@ const App: React.FC = () => {
                             : <span style={{ color: '#ef4444' }}>✗ No</span>}
                         </td>
                         <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' }}>{ev.expectedSalaryRange}</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #e5e7eb', textAlign: 'center' }}>
+                          <button onClick={() => handleDeleteEvaluation(ev.id, comparisonJd)} disabled={loading}
+                            style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
+                            Delete
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -748,10 +927,15 @@ const App: React.FC = () => {
       )}
 
       {loading && (
-        <div style={{ position: 'fixed', bottom: 24, right: 24, background: '#3b82f6', color: '#fff', padding: '12px 20px', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-          Processing...
+        <div style={{ position: 'fixed', bottom: 24, right: 24, background: '#3b82f6', color: '#fff', padding: '12px 20px', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+          {showProgress && progressSteps.length > 0
+            ? progressSteps[progressSteps.length - 1]?.message || 'Processing...'
+            : 'Processing...'}
         </div>
       )}
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };

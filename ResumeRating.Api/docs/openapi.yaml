@@ -1,0 +1,757 @@
+openapi: 3.0.3
+info:
+  title: Resume Rating API
+  description: AI-powered resume evaluation and interview preparation system
+  version: v1
+
+servers:
+  - url: https://localhost:5001
+    description: Local development (HTTPS)
+  - url: http://localhost:5000
+    description: Local development (HTTP)
+
+paths:
+  # ── Evaluation ─────────────────────────────────────────────
+  /api/evaluation/evaluate:
+    post:
+      tags: [Evaluation]
+      summary: Evaluate a resume against a job description
+      operationId: evaluate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateRequest"
+      responses:
+        "200":
+          description: Evaluation completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateEvaluation"
+        "400":
+          description: Missing ResumeId or JobDescriptionId
+        "404":
+          description: Resume or job description not found
+
+  /api/evaluation/evaluate-stream:
+    post:
+      tags: [Evaluation]
+      summary: Evaluate with real-time progress via Server-Sent Events
+      operationId: evaluateStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateRequest"
+      responses:
+        "200":
+          description: SSE stream of progress events followed by the final evaluation result
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /api/evaluation/{jobDescriptionId}:
+    get:
+      tags: [Evaluation]
+      summary: Get all evaluations for a job description
+      operationId: getEvaluations
+      parameters:
+        - name: jobDescriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of evaluations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CandidateEvaluation"
+
+  /api/evaluation/{evaluationId}:
+    delete:
+      tags: [Evaluation]
+      summary: Delete an evaluation
+      operationId: deleteEvaluation
+      parameters:
+        - name: evaluationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Evaluation deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "404":
+          description: Evaluation not found
+
+  /api/evaluation/evaluate-all/{jobDescriptionId}:
+    post:
+      tags: [Evaluation]
+      summary: Evaluate all resumes against a job description
+      operationId: evaluateAll
+      parameters:
+        - name: jobDescriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: All evaluations completed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CandidateEvaluation"
+        "404":
+          description: Job description not found
+
+  /api/evaluation/seed:
+    post:
+      tags: [Evaluation]
+      summary: Seed resumes and job descriptions from the assets folder
+      operationId: seedFromAssets
+      responses:
+        "200":
+          description: Seed completed
+        "404":
+          description: Assets directory not found
+
+  # ── L1 Questionnaire & Feedback ────────────────────────────
+  /api/evaluation/questionnaire/{evaluationId}:
+    post:
+      tags: [L1 Interview]
+      summary: Generate an L1 interview questionnaire for an evaluation
+      operationId: generateQuestionnaire
+      parameters:
+        - name: evaluationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Questionnaire generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Questionnaire"
+        "400":
+          description: Invalid operation (e.g. candidate not recommended for L1)
+        "404":
+          description: Evaluation not found
+
+  /api/evaluation/l1-feedback:
+    post:
+      tags: [L1 Interview]
+      summary: Submit candidate answers for L1 evaluation
+      operationId: submitL1Answers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/L1AnswersRequest"
+      responses:
+        "200":
+          description: L1 feedback generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/L1Feedback"
+        "400":
+          description: Missing required fields or no answers provided
+        "404":
+          description: Evaluation or questionnaire not found
+
+  # ── L2 Questionnaire & Feedback ────────────────────────────
+  /api/evaluation/l2-questionnaire/{evaluationId}:
+    post:
+      tags: [L2 Interview]
+      summary: Generate an L2 technical interview questionnaire
+      operationId: generateL2Questionnaire
+      parameters:
+        - name: evaluationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: L2 questionnaire generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/L2Questionnaire"
+        "400":
+          description: Invalid operation (e.g. candidate not recommended for tech round)
+        "404":
+          description: Evaluation not found
+
+  /api/evaluation/l2-feedback:
+    post:
+      tags: [L2 Interview]
+      summary: Submit candidate answers for L2 technical evaluation
+      operationId: submitL2Answers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/L2AnswersRequest"
+      responses:
+        "200":
+          description: L2 assessment generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/L2Assessment"
+        "400":
+          description: Missing required fields
+        "404":
+          description: Evaluation or L2 questionnaire not found
+
+  # ── Job Description ────────────────────────────────────────
+  /api/jobdescription:
+    post:
+      tags: [Job Description]
+      summary: Create a new job description
+      operationId: createJobDescription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobDescription"
+      responses:
+        "200":
+          description: Job description created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobDescription"
+        "400":
+          description: Title and Description are required
+    get:
+      tags: [Job Description]
+      summary: Get all job descriptions
+      operationId: getAllJobDescriptions
+      responses:
+        "200":
+          description: List of job descriptions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobDescription"
+
+  # ── Resume ─────────────────────────────────────────────────
+  /api/resume/upload:
+    post:
+      tags: [Resume]
+      summary: Upload a resume file (PDF, DOCX, or TXT — 10 MB max)
+      operationId: uploadResume
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Resume file (.pdf, .docx, or .txt)
+                linkedInUrl:
+                  type: string
+                  nullable: true
+                  description: Candidate's LinkedIn profile URL
+                gitHubUsername:
+                  type: string
+                  nullable: true
+                  description: Candidate's GitHub username
+      responses:
+        "200":
+          description: Resume uploaded and parsed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resume"
+        "400":
+          description: No file uploaded or unsupported file type
+
+  /api/resume:
+    get:
+      tags: [Resume]
+      summary: Get all resumes (summary view without extracted text)
+      operationId: getAllResumes
+      responses:
+        "200":
+          description: List of resume summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ResumeSummary"
+
+  /api/resume/{resumeId}:
+    delete:
+      tags: [Resume]
+      summary: Delete a resume and its associated evaluations
+      operationId: deleteResume
+      parameters:
+        - name: resumeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resume and associated evaluations deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "404":
+          description: Resume not found
+
+components:
+  schemas:
+    # ── Requests ───────────────────────────────────────────────
+    EvaluateRequest:
+      type: object
+      required: [resumeId, jobDescriptionId]
+      properties:
+        resumeId:
+          type: string
+        jobDescriptionId:
+          type: string
+
+    L1AnswersRequest:
+      type: object
+      required: [evaluationId, questionnaireId, answers]
+      properties:
+        evaluationId:
+          type: string
+        questionnaireId:
+          type: string
+        answers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CandidateAnswer"
+
+    CandidateAnswer:
+      type: object
+      properties:
+        questionNumber:
+          type: integer
+        answer:
+          type: string
+
+    L2AnswersRequest:
+      type: object
+      required: [evaluationId, l2QuestionnaireId]
+      properties:
+        evaluationId:
+          type: string
+        l2QuestionnaireId:
+          type: string
+        systemDesignAnswer:
+          type: string
+        handsOnCodingAnswer:
+          type: string
+        designThinkingAnswer:
+          type: string
+        tradeOffAnalysisAnswer:
+          type: string
+
+    # ── Domain Models ──────────────────────────────────────────
+    JobDescription:
+      type: object
+      required: [title, description]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        requiredSkills:
+          type: string
+        preferredSkills:
+          type: string
+        experienceLevel:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Resume:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        candidateName:
+          type: string
+        extractedText:
+          type: string
+        linkedInUrl:
+          type: string
+        gitHubUsername:
+          type: string
+        gitHubProfileSummary:
+          type: string
+        uploadedAt:
+          type: string
+          format: date-time
+
+    ResumeSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        candidateName:
+          type: string
+        linkedInUrl:
+          type: string
+        gitHubUsername:
+          type: string
+        uploadedAt:
+          type: string
+          format: date-time
+
+    CandidateEvaluation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        resumeId:
+          type: string
+        jobDescriptionId:
+          type: string
+        candidateName:
+          type: string
+        # Scores (1-10)
+        experienceScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        workHistoryScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        educationScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        sideProjectsScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        jobFitScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        awwFactorScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        uniquenessFactor:
+          type: integer
+          minimum: 1
+          maximum: 10
+        gitHubScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        onlinePresenceScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        codeProficiencyScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        resumeAuthenticityScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        buzzwordScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        aiGeneratedScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        overallScore:
+          type: integer
+          minimum: 1
+          maximum: 10
+        # Feedback
+        experienceFeedback:
+          type: string
+        workHistoryFeedback:
+          type: string
+        educationFeedback:
+          type: string
+        sideProjectsFeedback:
+          type: string
+        jobFitFeedback:
+          type: string
+        awwFactorFeedback:
+          type: string
+        uniquenessFeedback:
+          type: string
+        gitHubFeedback:
+          type: string
+        onlinePresenceFeedback:
+          type: string
+        codeProficiencyFeedback:
+          type: string
+        resumeAuthenticityFeedback:
+          type: string
+        buzzwordFeedback:
+          type: string
+        aiGeneratedFeedback:
+          type: string
+        overallFeedback:
+          type: string
+        # Tailoring detection
+        tailoringRedFlags:
+          type: array
+          items:
+            type: string
+        buzzwordsDetected:
+          type: array
+          items:
+            type: string
+        authenticityAnalysis:
+          type: string
+        standout:
+          type: string
+        # Salary estimates
+        estimatedCurrentPackage:
+          type: string
+        estimatedCurrentRole:
+          type: string
+        expectedSalaryRange:
+          type: string
+        recommendedForL1:
+          type: boolean
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    Questionnaire:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        evaluationId:
+          type: string
+        candidateName:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Question"
+        createdAt:
+          type: string
+          format: date-time
+
+    Question:
+      type: object
+      properties:
+        number:
+          type: integer
+        category:
+          type: string
+          description: "Technical, Behavioral, Situational, or Role-Specific"
+        text:
+          type: string
+        expectedInsight:
+          type: string
+        difficulty:
+          type: string
+          description: "Easy, Medium, or Hard"
+
+    L1Feedback:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        evaluationId:
+          type: string
+        questionnaireId:
+          type: string
+        candidateName:
+          type: string
+        answerEvaluations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnswerEvaluation"
+        overallL1Score:
+          type: integer
+        overallL1Feedback:
+          type: string
+        techHandsOnRecommendation:
+          type: string
+        areasToProbeInTechRound:
+          type: array
+          items:
+            type: string
+        recommendedForTechRound:
+          type: boolean
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    AnswerEvaluation:
+      type: object
+      properties:
+        questionNumber:
+          type: integer
+        question:
+          type: string
+        candidateAnswer:
+          type: string
+        score:
+          type: integer
+        feedback:
+          type: string
+
+    L2Questionnaire:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        evaluationId:
+          type: string
+        l1FeedbackId:
+          type: string
+        candidateName:
+          type: string
+        systemDesign:
+          $ref: "#/components/schemas/L2ChallengePrompt"
+        handsOnCoding:
+          $ref: "#/components/schemas/L2ChallengePrompt"
+        designThinking:
+          $ref: "#/components/schemas/L2ChallengePrompt"
+        tradeOffAnalysis:
+          $ref: "#/components/schemas/L2ChallengePrompt"
+        createdAt:
+          type: string
+          format: date-time
+
+    L2ChallengePrompt:
+      type: object
+      properties:
+        scenario:
+          type: string
+        expectedApproach:
+          type: string
+        evaluationCriteria:
+          type: array
+          items:
+            type: string
+
+    L2Assessment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        evaluationId:
+          type: string
+        l1FeedbackId:
+          type: string
+        candidateName:
+          type: string
+        systemDesign:
+          $ref: "#/components/schemas/L2Challenge"
+        handsOnCoding:
+          $ref: "#/components/schemas/L2Challenge"
+        designThinking:
+          $ref: "#/components/schemas/L2Challenge"
+        tradeOffAnalysis:
+          $ref: "#/components/schemas/L2Challenge"
+        overallL2Score:
+          type: integer
+        overallL2Feedback:
+          type: string
+        strengths:
+          type: string
+        weaknesses:
+          type: string
+        hiringRecommendation:
+          type: string
+          description: "Strong Hire / Hire / Lean No Hire / No Hire"
+        recommendedForHire:
+          type: boolean
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    L2Challenge:
+      type: object
+      properties:
+        scenario:
+          type: string
+        expectedApproach:
+          type: string
+        evaluationCriteria:
+          type: array
+          items:
+            type: string
+        candidateResponse:
+          type: string
+        score:
+          type: integer
+        feedback:
+          type: string
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+tags:
+  - name: Evaluation
+    description: Resume evaluation against job descriptions
+  - name: L1 Interview
+    description: L1 screening questionnaire generation and answer evaluation
+  - name: L2 Interview
+    description: L2 technical interview challenge generation and assessment
+  - name: Job Description
+    description: Job description management
+  - name: Resume
+    description: Resume upload and management

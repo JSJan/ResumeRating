@@ -47,4 +47,18 @@ public class ResumeController : ControllerBase
         });
         return Ok(summaries);
     }
+
+    [HttpDelete("{resumeId}")]
+    public async Task<IActionResult> Delete(string resumeId)
+    {
+        try
+        {
+            await _evaluationService.DeleteResumeAsync(resumeId);
+            return Ok(new { message = "Resume and associated evaluations deleted." });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
 }

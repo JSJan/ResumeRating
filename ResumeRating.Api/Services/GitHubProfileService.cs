@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Newtonsoft.Json;
 
 namespace ResumeRating.Api.Services;
@@ -59,6 +60,9 @@ public class CodeFile
 public class GitHubProfileService : IGitHubProfileService
 {
     private readonly HttpClient _httpClient;
+    private static readonly ConcurrentDictionary<string, (GitHubProfileData Data, DateTime FetchedAt)> _profileCache = new();
+    private static readonly ConcurrentDictionary<string, (GitHubCodeAnalysis Data, DateTime FetchedAt)> _codeCache = new();
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(24);
 
     public GitHubProfileService(IConfiguration configuration)
     {
@@ -76,6 +80,10 @@ public class GitHubProfileService : IGitHubProfileService
 
     public async Task<GitHubProfileData> FetchProfileAsync(string username)
     {
+        var cacheKey = username.ToLowerInvariant();
+        if (_profileCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow - cached.FetchedAt < CacheDuration)
+            return cached.Data;
+
         var profile = new GitHubProfileData { Username = username };
 
         // Fetch user profile
@@ -149,6 +157,7 @@ public class GitHubProfileService : IGitHubProfileService
                 profile.Summary += $"README excerpt:\n{repo.ReadmeExcerpt}\n";
         }
 
+        _profileCache[cacheKey] = (profile, DateTime.UtcNow);
         return profile;
     }
 
@@ -201,6 +210,12 @@ public class GitHubProfileService : IGitHubProfileService
 
     public async Task<GitHubCodeAnalysis> AnalyzeRepoCodeAsync(string username, List<string> relevantSkills)
     {
+        // Cache key includes username + sorted skills for consistency
+        var skillsKey = string.Join(",", relevantSkills.OrderBy(s => s, StringComparer.OrdinalIgnoreCase));
+        var cacheKey = $"{username.ToLowerInvariant()}:{skillsKey}";
+        if (_codeCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow - cached.FetchedAt < CacheDuration)
+            return cached.Data;
+
         var analysis = new GitHubCodeAnalysis { Username = username };
 
         // Map skills to file extensions that matter
@@ -308,6 +323,7 @@ public class GitHubProfileService : IGitHubProfileService
         }
 
         analysis.Summary = summaryBuilder.ToString();
+        _codeCache[cacheKey] = (analysis, DateTime.UtcNow);
         return analysis;
     }
 

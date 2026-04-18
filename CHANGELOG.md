@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-04-18
+
+### Added
+- **Runtime token tracking** — `GET /api/evaluation/token-usage` returns per-call token counts, input/output breakdown, estimated cost, and summary grouped by operation and model
+- `GET /api/evaluation/token-usage/log` for full call-by-call history
+- **Claude Haiku integration** — set `Anthropic:ApiKey` + `Anthropic:LightModel` in appsettings.json to route L1/L2 calls through Anthropic Haiku instead of GPT-4o-mini
+- **Confirmation dialogs** before all AI-powered operations (Evaluate, Evaluate All, Generate L1/L2 Questionnaire, Submit L1/L2 Answers) to prevent accidental token usage
+- **Dimension tooltips** — hover over any score label in the evaluation view to see what that dimension measures
+- **Contextual error messages** — network errors, timeouts, 404s, 400s, and 500s now provide actionable guidance instead of generic text
+
+### Changed
+- **Tab bar** — responsive horizontal scroll with emoji icons; no longer wraps/overflows on smaller screens
+- `GitHub:LightModel` setting now documented in appsettings.json
+- `appsettings.json` includes `Anthropic:LightModel` field for hybrid provider configuration
+
+### Fixed
+- Tab bar overflow on screens narrower than 960px (8 tabs previously wrapped to multiple rows)
+- Generic "An error occurred" messages replaced with specific guidance per error type
+
+## [0.4.0] - 2026-04-17
+
+### Added
+- **Cost optimization pipeline** — `ResumeAnalysisService` performs local pre-processing (keyword match, readability, AI-detection, years of experience, education level, buzzword counting, power verb detection, GitHub skill overlap) before AI evaluation
+- **Multi-model support** — GPT-4o for evaluations, GPT-4o-mini for L1/L2 questionnaires and answer evaluation (~93% cheaper)
+- **GitHub data caching** — 24-hour in-memory cache for profile data and code analysis
+- **Duplicate evaluation prevention** — `EvaluateAsync` returns cached result when resume+JD combo already evaluated
+- **Prompt optimization** — consolidated 3 overlapping sections into 1, compact JSON schema, conditional sections, resume text truncation at 8k chars
+- **OpenAPI spec** — `ResumeRating.Api/docs/openapi.yaml` covering all 14 endpoints
+- TOKEN_USAGE_COST.md, TEST_ARCHITECTURE.md, API_PERFORMANCE.md documentation
+
+### Fixed
+- Individual evaluate creating duplicate evaluations for same resume+JD combo
+
 ## [0.3.0] - 2026-04-15
 
 ### Added

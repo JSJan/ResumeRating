@@ -8,6 +8,7 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddSingleton<IStorageService, FileStorageService>();
 builder.Services.AddSingleton<IResumeParserService, ResumeParserService>();
+builder.Services.AddSingleton<IResumeAnalysisService, ResumeAnalysisService>();
 builder.Services.AddSingleton<IAiService, GitHubModelsAiService>();
 builder.Services.AddSingleton<IGitHubProfileService, GitHubProfileService>();
 builder.Services.AddScoped<IEvaluationService, EvaluationService>();
@@ -23,11 +24,19 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "Resume Rating API", Version = "v1", Description = "AI-powered resume evaluation and interview preparation system" });
+});
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Resume Rating API v1"));
 }
 
 app.UseCors("AllowFrontend");
