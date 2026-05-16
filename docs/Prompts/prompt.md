@@ -106,3 +106,7 @@ Enable upload and saving of job description
 Improve
 
 - Store to document db
+
+Prompt 15
+
+create a PRD document, create a architecture document, a database setup for saving the job description in db and also way to upload multiple resumes files
